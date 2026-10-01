@@ -2,7 +2,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { clipsEnd, compositionLength, rootLength, withLength } from "../src/shared/length.ts";
-import { STARTER_HTML } from "../src/client/starter.ts";
+import { SHAPES, starterHtml } from "../src/client/starter.ts";
+
+const STARTER_HTML = starterHtml(1920, 1080);
 
 // The starter as it was before it stated its length: clips run to 5 s, the
 // GSAP entrances end at 1.7 s, and HyperFrames rendered 1.7 s of it.
@@ -56,4 +58,14 @@ test("only the clip class counts, and $ in the root survives", () => {
 test("clips inside an inline nested composition do not count", () => {
   const html = `<div data-composition-id="a"><div class="clip" data-composition-id="intro" data-start="0" data-duration="4"></div><template id="t"><div data-composition-id="intro"><h1 class="clip" data-start="9" data-duration="3"></h1></div></template></div>`;
   assert.equal(clipsEnd(html), 4);
+});
+
+test("every shape starts at its own size and states the same length", () => {
+  for (const { width, height } of SHAPES) {
+    const html = starterHtml(width, height);
+    const root = html.match(/<div id="root"[^>]*>/)![0];
+    assert.match(root, new RegExp(`data-width="${width}" data-height="${height}"`));
+    assert.match(root, new RegExp(`width:${width}px;height:${height}px;`));
+    assert.equal(compositionLength(html), 5);
+  }
 });

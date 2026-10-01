@@ -7,7 +7,7 @@ import {
   useHostChanges,
   useHostNavigate,
 } from "@clawnify/app/client";
-import { STARTER_HTML } from "./starter";
+import { SHAPES, starterHtml } from "./starter";
 import { compositionLength } from "../shared/length";
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import {
@@ -182,7 +182,7 @@ function Gallery({ navigate }: { navigate: (to: string) => void }) {
   useHostChanges(load);
   useChatContext({ label: "Videos" });
 
-  async function newVideo() {
+  async function newVideo(shape: Shape) {
     setCreating(true);
     try {
       const c = await api.send<Composition>("POST", "/api/compositions", {
@@ -190,7 +190,7 @@ function Gallery({ navigate }: { navigate: (to: string) => void }) {
         // "Untitled" tell you nothing; this agrees with the thumbnail and says
         // what kind of object you just got.
         name: "Product launch title card",
-        html: STARTER_HTML,
+        html: starterHtml(shape.width, shape.height),
       });
       navigate(`/${c.id}`);
     } finally {
@@ -216,10 +216,12 @@ function Gallery({ navigate }: { navigate: (to: string) => void }) {
             </p>
           </div>
           {comps && comps.length > 0 && (
-            <button onClick={newVideo} disabled={creating} className={`${hasChat ? btnSecondary : btnPrimary} shrink-0`}>
-              {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-              New video
-            </button>
+            <NewVideoMenu align="end" onPick={newVideo}>
+              <button disabled={creating} className={`${hasChat ? btnSecondary : btnPrimary} shrink-0`}>
+                {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                New video
+              </button>
+            </NewVideoMenu>
           )}
         </div>
 
@@ -248,9 +250,11 @@ function Gallery({ navigate }: { navigate: (to: string) => void }) {
                 : "Start from a working title card and change the words."
             }
             action={
-              <button onClick={newVideo} disabled={creating} className={hasChat ? btnSecondary : btnPrimary}>
-                <Plus className="w-4 h-4" /> New video
-              </button>
+              <NewVideoMenu onPick={newVideo}>
+                <button disabled={creating} className={hasChat ? btnSecondary : btnPrimary}>
+                  <Plus className="w-4 h-4" /> New video
+                </button>
+              </NewVideoMenu>
             }
           />
         ) : (
@@ -281,6 +285,64 @@ function Gallery({ navigate }: { navigate: (to: string) => void }) {
 
       </div>
     </main>
+  );
+}
+
+type Shape = (typeof SHAPES)[number];
+
+/**
+ * Picks the shape a new video starts in. The shape is the one thing that is
+ * costly to change later (every position is laid out against the frame), so
+ * it is asked once, up front, where the video is made.
+ */
+function NewVideoMenu({
+  align,
+  onPick,
+  children,
+}: {
+  align?: "start" | "end";
+  onPick: (shape: Shape) => void;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>{children}</PopoverTrigger>
+      <PopoverContent align={align}>
+        <Command label="Shape">
+          {SHAPES.map((o) => (
+            <CommandItem
+              key={o.id}
+              value={o.id}
+              onSelect={() => {
+                setOpen(false);
+                onPick(o);
+              }}
+            >
+              <ShapeGlyph width={o.width} height={o.height} />
+              <span className="flex-1 min-w-0">
+                <span className="block truncate">{o.name}</span>
+                <span className="block truncate text-fine text-faint">{o.hint}</span>
+              </span>
+              <span className="text-fine text-muted tabular-nums">{o.ratio}</span>
+            </CommandItem>
+          ))}
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** The frame drawn to scale, so the three options read at a glance. */
+function ShapeGlyph({ width, height }: { width: number; height: number }) {
+  const s = 16 / Math.max(width, height);
+  return (
+    <span className="w-5 h-5 shrink-0 grid place-items-center" aria-hidden>
+      <span
+        className="border-2 border-muted"
+        style={{ width: Math.round(width * s), height: Math.round(height * s) }}
+      />
+    </span>
   );
 }
 
