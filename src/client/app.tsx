@@ -10,6 +10,7 @@ import {
 import { SHAPES, starterHtml } from "./starter";
 import { Timeline, type TimelineEdit } from "./timeline";
 import { compositionLength } from "../shared/length";
+import type { Lint } from "../server/lint";
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import {
   ArrowLeft,
@@ -25,6 +26,7 @@ import {
   Type as TypeIcon,
   Music,
   AlertCircle,
+  TriangleAlert,
   X,
   ChevronDown,
   Sparkles,
@@ -44,6 +46,7 @@ import {
   btnIcon,
   btnPrimary,
   btnSecondary,
+  btnStatus,
   card,
   chip,
   stretch,
@@ -58,6 +61,8 @@ interface Composition {
   html: string;
   fps: number;
   updated_at: string;
+  /** What HyperFrames' linter says, on a single composition only (server/lint.ts). */
+  lint?: Lint | null;
 }
 
 interface Asset {
@@ -475,6 +480,8 @@ function Editor({
     h.future = [];
     bumpHistory((n) => n + 1);
   }
+  // The linter's verdict on the saved composition; every save answers with a new one.
+  const [lint, setLint] = useState<Lint | null>(comp.lint ?? null);
 
   // Selected clip (by index) for the right-side inspector.
   const [selectedClip, setSelectedClip] = useState<number | null>(null);
@@ -563,6 +570,7 @@ function Editor({
     setHtml(next.html);
     setName(next.name);
     setFps(next.fps);
+    setLint(next.lint ?? null);
     setIncoming(null);
     restoreRef.current = timeRef.current; // keep the playhead where it was
     setPreviewKey((k) => k + 1);
@@ -586,6 +594,11 @@ function Editor({
     const words = selClip ? selClip.text.replace(/\n+/g, " ").slice(0, 80) || selClip.label : "";
     const about = selClip ? `, on the ${selClip.type} "${words}" (at ${selClip.start}s)` : "";
     openChat(`In the OpenMotion video "${name}"${about}: `);
+  }
+
+  function fixWithAI(found: Lint) {
+    const list = found.findings.map((f) => `- ${f.message}`).join("\n");
+    openChat(`In the OpenMotion video "${name}", fix what HyperFrames' linter reports:\n${list}`);
   }
 
   useEffect(() => {
@@ -636,8 +649,9 @@ function Editor({
       if (before !== null && before !== next) remember(before);
       setSaving(true);
       try {
-        await api.send("PUT", `/api/compositions/${comp.id}`, { name, html: next, fps });
+        const row = await api.send<Composition>("PUT", `/api/compositions/${comp.id}`, { name, html: next, fps });
         saved.current = { name, html: next, fps };
+        setLint(row.lint ?? null);
       } finally {
         setSaving(false);
       }
@@ -695,9 +709,10 @@ function Editor({
   async function save() {
     setSaving(true);
     try {
-      await api.send("PUT", `/api/compositions/${comp.id}`, { name, html, fps });
+      const row = await api.send<Composition>("PUT", `/api/compositions/${comp.id}`, { name, html, fps });
       if (saved.current.html !== html) remember(saved.current.html);
       saved.current = { name, html, fps };
+      setLint(row.lint ?? null);
       setIncoming(null);
       setPreviewKey((k) => k + 1); // reload iframe
       setTime(poster);
@@ -802,6 +817,7 @@ function Editor({
               ))}
             </div>
             <div className="flex items-center gap-2">
+              <LintMenu lint={lint} onFix={hasChat ? fixWithAI : undefined} />
               {hasChat && (
                 <button onClick={askAI} className={btnSecondary}>
                   <Sparkles className="w-4 h-4" /> Ask AI
@@ -1397,6 +1413,64 @@ function MediaPanel({ changes }: { changes: number }) {
  * made only when someone wants one, and it downloads as soon as it is ready.
  * Each export also lands in the media library, so it can be reused as footage.
  */
+// ── lint ─────────────────────────────────────────────────────────────
+
+/** What will render wrong, before anyone exports. Shown only when there is
+ *  something to say: a clean video gets no badge, not a green tick. */
+function LintMenu({ lint, onFix }: { lint: Lint | null; onFix?: (lint: Lint) => void }) {
+  const [open, setOpen] = useState(false);
+  if (!lint || lint.findings.length === 0) return null;
+  const total = lint.errors + lint.warnings;
+  const more = total - lint.findings.length;
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button className={lint.errors ? btnStatus.danger : btnStatus.warning}>
+          <TriangleAlert className="w-4 h-4" />
+          {total === 1 ? "1 issue" : `${total} issues`}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" wide>
+        <div className="max-h-96 overflow-y-auto p-3 space-y-3">
+          <p className="text-body-sm text-muted">These will look wrong in the exported video.</p>
+          <ul className="space-y-3">
+            {lint.findings.map((f, i) => (
+              <li key={i} className="flex gap-2">
+                <span
+                  aria-hidden
+                  className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${f.severity === "error" ? "bg-danger-solid" : "bg-warning-solid"}`}
+                />
+                <div className="min-w-0 [overflow-wrap:anywhere]">
+                  <p className="text-body-sm text-foreground">
+                    <span className="sr-only">{f.severity === "error" ? "Error: " : "Warning: "}</span>
+                    {f.message}
+                  </p>
+                  {f.fix && <p className="mt-1 text-fine text-muted">{f.fix}</p>}
+                  {f.line && <p className="mt-1 text-fine text-faint">Line {f.line}</p>}
+                </div>
+              </li>
+            ))}
+          </ul>
+          {more > 0 && <p className="text-fine text-faint">And {more} more.</p>}
+        </div>
+        {onFix && (
+          <div className="border-t border-border p-2">
+            <button
+              onClick={() => {
+                setOpen(false);
+                onFix(lint);
+              }}
+              className={`${btnSecondary} ${stretch}`}
+            >
+              <Sparkles className="w-4 h-4" /> Ask AI to fix
+            </button>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function ExportMenu({ comp, changes }: { comp: Composition; changes: number }) {
   const [open, setOpen] = useState(false);
   // null = not loaded yet: never claim "no exports" before we know.
@@ -1455,7 +1529,9 @@ function ExportMenu({ comp, changes }: { comp: Composition; changes: number }) {
       {err && (
         <div role="alert" className="fixed bottom-4 right-4 z-50 flex max-w-md items-start gap-2 rounded-sm bg-danger-tint px-3 py-2 text-body-sm text-danger shadow-float">
           <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
-          <span className="flex-1 break-words">Export failed: {err}</span>
+          <span className="flex-1 min-w-0 [overflow-wrap:anywhere]" title={err}>
+            Export failed: {err.length > 300 ? `${err.slice(0, 300)}…` : err}
+          </span>
           <button onClick={() => setErr("")} className={btnIcon} aria-label="Dismiss">
             <X className="w-4 h-4" />
           </button>

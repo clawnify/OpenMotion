@@ -22,6 +22,11 @@ export const btnSecondary = `${btnBase} pl-1.5 pr-2 bg-surface text-foreground h
 export const btnGhost = `${btnBase} px-2 text-muted hover:bg-surface-sunken hover:text-foreground`;
 /** Destructive: tint at rest, fills solid on hover. */
 export const btnDanger = `${btnBase} px-2 bg-danger-tint text-danger hover:bg-danger-solid hover:text-on-primary`;
+/** A status that opens its details: the Badge's tint and hue, as a button. */
+export const btnStatus = {
+  warning: `${btnBase} px-2 bg-warning-tint text-warning hover:opacity-80`,
+  danger: `${btnBase} px-2 bg-danger-tint text-danger hover:opacity-80`,
+};
 /** Icon-only control (row actions, transport). Square, so it stays optical. */
 export const btnIcon =
   "inline-grid place-items-center w-7 h-7 rounded-sm text-muted hover:bg-surface-sunken hover:text-foreground " +
@@ -196,10 +201,13 @@ export const PopoverTrigger = RadixPopover.Trigger;
 
 export function PopoverContent({
   align = "start",
+  wide = false,
   children,
 }: {
   /** "end" for a trigger at the right edge, so the list opens inward. */
   align?: "start" | "end";
+  /** Paragraphs rather than a list of options: a reading width, not the trigger's. */
+  wide?: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -208,7 +216,7 @@ export function PopoverContent({
         align={align}
         sideOffset={4}
         collisionPadding={8}
-        className="z-50 w-(--radix-popover-trigger-width) min-w-64 rounded-md bg-surface shadow-float outline-none"
+        className={`z-50 ${wide ? "w-96 max-w-[calc(100vw-16px)]" : "w-(--radix-popover-trigger-width) min-w-64"} rounded-md bg-surface shadow-float outline-none`}
       >
         {children}
       </RadixPopover.Content>
