@@ -482,6 +482,14 @@ function Editor({
   }
   // The linter's verdict on the saved composition; every save answers with a new one.
   const [lint, setLint] = useState<Lint | null>(comp.lint ?? null);
+  // Saves can overlap (a debounced edit, then Save), and their answers can land
+  // out of order: only the latest one's verdict describes what is saved.
+  const lintSeq = useRef(0);
+  async function putAndLint(body: { name: string; html: string; fps: number }) {
+    const seq = ++lintSeq.current;
+    const row = await api.send<Composition>("PUT", `/api/compositions/${comp.id}`, body);
+    if (seq === lintSeq.current) setLint(row.lint ?? null);
+  }
 
   // Selected clip (by index) for the right-side inspector.
   const [selectedClip, setSelectedClip] = useState<number | null>(null);
@@ -570,6 +578,7 @@ function Editor({
     setHtml(next.html);
     setName(next.name);
     setFps(next.fps);
+    lintSeq.current++; // an in-flight save's verdict is older than this one
     setLint(next.lint ?? null);
     setIncoming(null);
     restoreRef.current = timeRef.current; // keep the playhead where it was
@@ -649,9 +658,8 @@ function Editor({
       if (before !== null && before !== next) remember(before);
       setSaving(true);
       try {
-        const row = await api.send<Composition>("PUT", `/api/compositions/${comp.id}`, { name, html: next, fps });
+        await putAndLint({ name, html: next, fps });
         saved.current = { name, html: next, fps };
-        setLint(row.lint ?? null);
       } finally {
         setSaving(false);
       }
@@ -709,10 +717,9 @@ function Editor({
   async function save() {
     setSaving(true);
     try {
-      const row = await api.send<Composition>("PUT", `/api/compositions/${comp.id}`, { name, html, fps });
+      await putAndLint({ name, html, fps });
       if (saved.current.html !== html) remember(saved.current.html);
       saved.current = { name, html, fps };
-      setLint(row.lint ?? null);
       setIncoming(null);
       setPreviewKey((k) => k + 1); // reload iframe
       setTime(poster);
@@ -1405,14 +1412,6 @@ function MediaPanel({ changes }: { changes: number }) {
   );
 }
 
-// ── export ───────────────────────────────────────────────────────────
-
-/**
- * Export is the only place a video is rendered. The preview is the video
- * frame for frame, so making or changing one never needs a render; a file is
- * made only when someone wants one, and it downloads as soon as it is ready.
- * Each export also lands in the media library, so it can be reused as footage.
- */
 // ── lint ─────────────────────────────────────────────────────────────
 
 /** What will render wrong, before anyone exports. Shown only when there is
@@ -1471,6 +1470,14 @@ function LintMenu({ lint, onFix }: { lint: Lint | null; onFix?: (lint: Lint) => 
   );
 }
 
+// ── export ───────────────────────────────────────────────────────────
+
+/**
+ * Export is the only place a video is rendered. The preview is the video
+ * frame for frame, so making or changing one never needs a render; a file is
+ * made only when someone wants one, and it downloads as soon as it is ready.
+ * Each export also lands in the media library, so it can be reused as footage.
+ */
 function ExportMenu({ comp, changes }: { comp: Composition; changes: number }) {
   const [open, setOpen] = useState(false);
   // null = not loaded yet: never claim "no exports" before we know.
