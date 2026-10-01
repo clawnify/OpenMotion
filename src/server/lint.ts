@@ -41,7 +41,7 @@ const MAX_FINDINGS = 10;
  */
 function asRendered(html: string): string {
   if (/<html[\s>]/i.test(html)) return html;
-  return `<!doctype html><html><head><meta charset="utf-8" /></head><body>${html}\n</body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8" /><style>html,body{margin:0;padding:0;background:#000;overflow:hidden}</style></head><body>${html}\n</body></html>`;
 }
 
 /** Errors before warnings, and within each, every distinct problem once
