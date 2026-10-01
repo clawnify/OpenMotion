@@ -44,7 +44,11 @@ export function rootLength(html: string): number | null {
 /** Where the last clip ends, in seconds; 0 with no clips. */
 export function clipsEnd(html: string): number {
   let end = 0;
-  for (const [tag] of html.matchAll(TAG)) {
+  // An inline nested composition sits in a <template>; its clips are timed
+  // from the sub-composition's own start, and the page never renders them
+  // where they are written. Its host element is the clip that counts.
+  const page = html.replace(/<template[\s>][\s\S]*?<\/template>/gi, "");
+  for (const [tag] of page.matchAll(TAG)) {
     if (!/(^|\s)clip(\s|$)/.test(attr(tag, "class") ?? "")) continue;
     // A start like "intro - 0.5" refers to another clip; this reads only
     // numeric starts, so such a clip counts from 0.

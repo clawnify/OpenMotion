@@ -52,3 +52,8 @@ test("only the clip class counts, and $ in the root survives", () => {
   assert.equal(clipsEnd(html), 2);
   assert.ok(withLength(html).startsWith(`<div data-composition-id="a" title="$& $1" data-duration="2">`));
 });
+
+test("clips inside an inline nested composition do not count", () => {
+  const html = `<div data-composition-id="a"><div class="clip" data-composition-id="intro" data-start="0" data-duration="4"></div><template id="t"><div data-composition-id="intro"><h1 class="clip" data-start="9" data-duration="3"></h1></div></template></div>`;
+  assert.equal(clipsEnd(html), 4);
+});
