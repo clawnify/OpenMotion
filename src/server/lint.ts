@@ -8,8 +8,10 @@
 // what lets the agent repair its own work before it reports back.
 //
 // The `browser` entry has no Node dependencies, so this runs in the Worker.
+// It is loaded on first use: it is most of the Worker's code, and loading it
+// at startup would slow every cold start, including routes that never lint.
 
-import { lintHyperframeHtml, type HyperframeLintFinding } from "@hyperframes/lint/browser";
+import type { HyperframeLintFinding } from "@hyperframes/lint/browser";
 
 export interface LintFinding {
   severity: "error" | "warning";
@@ -61,6 +63,7 @@ function byImportance(findings: HyperframeLintFinding[]): HyperframeLintFinding[
 export async function lintComposition(html: string): Promise<Lint | null> {
   if (!html.trim()) return null;
   try {
+    const { lintHyperframeHtml } = await import("@hyperframes/lint/browser");
     const result = await lintHyperframeHtml(asRendered(html));
     // "info" findings are advice about fonts and the like, not problems.
     const real = byImportance(result.findings.filter((f) => f.severity !== "info"));
