@@ -6,22 +6,34 @@
 // its own module for exactly that reason (see .design-lint-ignore).
 //
 // Three clips on three separate tracks with a staggered GSAP timeline, so
-// the timeline view shows real track registration. The root states the
+// the timeline view shows real track registration. Each clip sits at a fixed
+// offset from the frame's centre rather than a percentage of its height, so
+// the same title card reads the same way in every shape. The root states the
 // length (data-duration): the entrances finish at 1.7 s, and without it
 // HyperFrames would render only that much. Kept as a string rather than a DB
 // seed so it goes in via the normal parameterized insert.
-export const STARTER_HTML = `<div id="root" data-composition-id="untitled" data-start="0" data-duration="5" data-width="1920" data-height="1080"
-     style="width:1920px;height:1080px;background:#0b1020;position:relative;overflow:hidden;font-family:Inter,system-ui,sans-serif">
+
+/** The shapes a new video can start in: the three canvases HyperFrames
+ *  presets and agent.md pick from, all on the same 1080 px short edge. */
+export const SHAPES = [
+  { id: "landscape", name: "Landscape", ratio: "16:9", hint: "YouTube, websites, demos", width: 1920, height: 1080 },
+  { id: "vertical", name: "Vertical", ratio: "9:16", hint: "Reels, Shorts, TikTok", width: 1080, height: 1920 },
+  { id: "square", name: "Square", ratio: "1:1", hint: "Feed posts", width: 1080, height: 1080 },
+] as const;
+
+export function starterHtml(width: number, height: number): string {
+  return `<div id="root" data-composition-id="untitled" data-start="0" data-duration="5" data-width="${width}" data-height="${height}"
+     style="width:${width}px;height:${height}px;background:#0b1020;position:relative;overflow:hidden;font-family:Inter,system-ui,sans-serif">
   <div id="kicker" class="clip" data-start="0" data-duration="5" data-track-index="2"
-       style="position:absolute;top:34%;left:50%;transform:translate(-50%,-50%);color:#7c8cff;font-size:28px;font-weight:700;letter-spacing:4px;text-transform:uppercase;white-space:nowrap">
+       style="position:absolute;top:calc(50% - 173px);left:50%;transform:translate(-50%,-50%);color:#7c8cff;font-size:28px;font-weight:700;letter-spacing:4px;text-transform:uppercase;white-space:nowrap">
     Product Launch
   </div>
   <div id="title" class="clip" data-start="0.3" data-duration="4.7" data-track-index="1"
-       style="position:absolute;top:48%;left:50%;transform:translate(-50%,-50%);color:#fff;font-size:96px;font-weight:800;letter-spacing:-2px;text-align:center;white-space:nowrap">
+       style="position:absolute;top:calc(50% - 22px);left:50%;transform:translate(-50%,-50%);color:#fff;font-size:96px;font-weight:800;letter-spacing:-2px;text-align:center;white-space:nowrap">
     Your Title Here
   </div>
   <div id="sub" class="clip" data-start="0.9" data-duration="4.1" data-track-index="0"
-       style="position:absolute;top:60%;left:50%;transform:translate(-50%,-50%);color:#9aa6d6;font-size:34px;font-weight:500;text-align:center;white-space:nowrap">
+       style="position:absolute;top:calc(50% + 108px);left:50%;transform:translate(-50%,-50%);color:#9aa6d6;font-size:34px;font-weight:500;text-align:center;white-space:nowrap">
     A subtitle that fades in
   </div>
   <script src="https://cdn.jsdelivr.net/npm/gsap@3/dist/gsap.min.js"></script>
@@ -34,3 +46,4 @@ export const STARTER_HTML = `<div id="root" data-composition-id="untitled" data-
     window.__timelines["untitled"] = tl;
   </script>
 </div>`;
+}

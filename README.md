@@ -48,7 +48,7 @@ pnpm install
 pnpm dev        # UI on :5173, API on :8787, with a local SQLite database and storage
 ```
 
-Hit **New composition** for a starter, edit the HTML in **Compose**, drop media in **Media**, scrub the timeline, and render from **Renders**.
+Hit **New video** and pick a shape (landscape, vertical or square) for a starter, edit the HTML in **Compose**, drop media in **Media**, scrub the timeline, and render from **Renders**.
 
 ## Deploy
 

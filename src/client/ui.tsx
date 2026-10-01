@@ -194,11 +194,18 @@ export function ConfirmDialog({
 export const Popover = RadixPopover.Root;
 export const PopoverTrigger = RadixPopover.Trigger;
 
-export function PopoverContent({ children }: { children: React.ReactNode }) {
+export function PopoverContent({
+  align = "start",
+  children,
+}: {
+  /** "end" for a trigger at the right edge, so the list opens inward. */
+  align?: "start" | "end";
+  children: React.ReactNode;
+}) {
   return (
     <RadixPopover.Portal>
       <RadixPopover.Content
-        align="start"
+        align={align}
         sideOffset={4}
         collisionPadding={8}
         className="z-50 w-(--radix-popover-trigger-width) min-w-64 rounded-md bg-surface shadow-float outline-none"
