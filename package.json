@@ -7,7 +7,7 @@
     "dev": "wrangler d1 execute open-motion-db --local --file=schema.sql && concurrently -n ui,api -c cyan,green \"vite\" \"wrangler dev --port 8787\"",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --no-warnings --test test/length.test.ts",
+    "test": "node --experimental-strip-types --no-warnings --test test/*.test.ts",
     "deploy": "clawnify deploy"
   },
   "dependencies": {

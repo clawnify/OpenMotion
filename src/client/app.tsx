@@ -8,6 +8,7 @@ import {
   useHostNavigate,
 } from "@clawnify/app/client";
 import { SHAPES, starterHtml } from "./starter";
+import { Timeline, type TimelineEdit } from "./timeline";
 import { compositionLength } from "../shared/length";
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import {
@@ -19,8 +20,6 @@ import {
   Copy,
   Check,
   Loader2,
-  Play,
-  Pause,
   Video,
   Image as ImageIcon,
   Type as TypeIcon,
@@ -464,6 +463,18 @@ function Editor({
   // Bumped on every write the chat makes, so the panels refetch.
   const [changes, setChanges] = useState(0);
   const hasChat = useHasChat();
+  // Undo: whole-composition snapshots, one per gesture or burst of typing.
+  const history = useRef<{ past: string[]; future: string[] }>({ past: [], future: [] });
+  const [, bumpHistory] = useState(0);
+  // The HTML before the edit now being saved, recorded as one step once it is.
+  const pendingBefore = useRef<string | null>(null);
+  function remember(before: string) {
+    const h = history.current;
+    h.past.push(before);
+    if (h.past.length > 100) h.past.shift();
+    h.future = [];
+    bumpHistory((n) => n + 1);
+  }
 
   // Selected clip (by index) for the right-side inspector.
   const [selectedClip, setSelectedClip] = useState<number | null>(null);
@@ -547,6 +558,7 @@ function Editor({
   useChatContext({ label: "Video", record: { type: "composition", id: comp.id, label: name } });
 
   function adopt(next: Composition) {
+    if (next.html !== html) remember(html); // the agent's change can be undone like any other
     saved.current = { name: next.name, html: next.html, fps: next.fps };
     setHtml(next.html);
     setName(next.name);
@@ -583,31 +595,45 @@ function Editor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedClip]);
 
-  // Spacebar toggles play/pause (unless typing in a field).
+  // Keys: space plays/pauses, Delete removes the selected clip, Cmd/Ctrl-Z
+  // undoes and Shift-Cmd/Ctrl-Z redoes (never while typing in a field). The
+  // handler is registered once and reads the latest state through a ref, so a
+  // key pressed right after a click acts on what was just selected.
+  const keyActions = useRef({ togglePlay, deleteClip, step, selectedClip });
+  keyActions.current = { togglePlay, deleteClip, step, selectedClip };
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.code !== "Space") return;
       const el = document.activeElement as HTMLElement | null;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
-      e.preventDefault();
-      togglePlay();
+      const a = keyActions.current;
+      if (e.code === "Space") {
+        e.preventDefault();
+        a.togglePlay();
+      } else if ((e.key === "Delete" || e.key === "Backspace") && a.selectedClip != null) {
+        e.preventDefault();
+        a.deleteClip(a.selectedClip);
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        a.step(e.shiftKey ? "redo" : "undo");
+      }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing]);
+  }, []);
 
   const reloadTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  function updateClip(index: number, patch: ClipPatch) {
-    const next = applyClipPatch(html, index, patch);
-    setHtml(next);
-    // The preview iframe renders the SAVED composition (the harness is served
-    // by /api/compositions/:id/preview), so reloading it without saving first
-    // just re-showed the old frame: you typed your title and the canvas never
-    // changed. Persist, THEN reload. Debounced so typing stays smooth, and the
-    // playhead is restored afterwards so an edit doesn't jump the time either.
+  /**
+   * Save `next` and reload the preview on it. The preview iframe renders the
+   * SAVED composition (the harness is served by /api/compositions/:id/preview),
+   * so it can only show an edit after the save. Debounced so typing stays
+   * smooth; the playhead is restored afterwards so an edit never jumps the time.
+   */
+  function persist(next: string, delay = 350) {
     clearTimeout(reloadTimer.current);
     reloadTimer.current = setTimeout(async () => {
+      const before = pendingBefore.current;
+      pendingBefore.current = null;
+      if (before !== null && before !== next) remember(before);
       setSaving(true);
       try {
         await api.send("PUT", `/api/compositions/${comp.id}`, { name, html: next, fps });
@@ -617,13 +643,60 @@ function Editor({
       }
       restoreRef.current = timeRef.current;
       setPreviewKey((k) => k + 1);
-    }, 350);
+    }, delay);
+  }
+
+  /** An inspector edit. A burst of typing becomes one undo step. */
+  function updateClip(index: number, patch: ClipPatch) {
+    if (pendingBefore.current === null) pendingBefore.current = html;
+    const next = applyClipPatch(html, index, patch);
+    setHtml(next);
+    persist(next);
+  }
+
+  /**
+   * A timeline drag. The edit carries absolute values and is applied to the
+   * HTML from when the drag began (this handler's closure), so live updates
+   * never compound; the release saves once and records one undo step.
+   */
+  function onTimelineChange(id: string, edit: TimelineEdit, phase: "live" | "commit") {
+    const patch: ClipPatch = {};
+    if (edit.start !== undefined) patch.start = edit.start;
+    if (edit.duration !== undefined) patch.duration = edit.duration;
+    if (edit.lane !== undefined) patch.track = edit.lane;
+    if (pendingBefore.current === null) pendingBefore.current = html;
+    const next = applyClipPatch(html, Number(id), patch);
+    setHtml(next);
+    if (phase === "commit") persist(next, 0);
+  }
+
+  function deleteClip(index: number) {
+    const next = removeClip(html, index);
+    if (next === html) return;
+    if (pendingBefore.current === null) pendingBefore.current = html;
+    setSelectedClip(null);
+    setHtml(next);
+    persist(next, 0);
+  }
+
+  function step(dir: "undo" | "redo") {
+    const h = history.current;
+    const to = dir === "undo" ? h.past.pop() : h.future.pop();
+    if (to === undefined) return;
+    (dir === "undo" ? h.future : h.past).push(html);
+    bumpHistory((n) => n + 1);
+    clearTimeout(reloadTimer.current);
+    pendingBefore.current = null;
+    setHtml(to);
+    persist(to, 0);
+    // persist() records pendingBefore; history was moved by hand above.
   }
 
   async function save() {
     setSaving(true);
     try {
       await api.send("PUT", `/api/compositions/${comp.id}`, { name, html, fps });
+      if (saved.current.html !== html) remember(saved.current.html);
       saved.current = { name, html, fps };
       setIncoming(null);
       setPreviewKey((k) => k + 1); // reload iframe
@@ -771,15 +844,27 @@ function Editor({
 
         {tab === "timeline" && (
           <Timeline
-            html={html}
-            fps={fps}
-            time={time}
+            items={clips.map((c) => ({
+              id: String(c.index),
+              lane: c.track,
+              start: c.start,
+              duration: c.duration,
+              label: c.label,
+              fillClass: CLIP_FILL[c.type],
+              barClass: CLIP_BAR[c.type],
+              icon: clipIcon(c.type),
+            }))}
+            lanes={parseClips(html).tracks}
             duration={duration}
+            time={time}
             playing={playing}
-            selected={selectedClip}
-            onSelect={setSelectedClip}
+            fps={fps}
+            selected={selectedClip == null ? null : String(selectedClip)}
+            onSelect={(id) => setSelectedClip(Number(id))}
             onSeek={seek}
             onTogglePlay={togglePlay}
+            onChange={onTimelineChange}
+            formatTime={(t) => fmtTC(t, fps)}
           />
         )}
         {tab === "media" && <MediaPanel changes={changes} />}
@@ -969,6 +1054,20 @@ function applyClipPatch(html: string, index: number, patch: ClipPatch): string {
   }
 }
 
+/** Remove clip #index. Tweens that targeted it find nothing and do nothing. */
+function removeClip(html: string, index: number): string {
+  try {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const root = doc.querySelector("[data-composition-id]");
+    const el = doc.querySelectorAll(".clip")[index];
+    if (!root || !el) return html;
+    el.remove();
+    return root.outerHTML;
+  } catch {
+    return html;
+  }
+}
+
 // Category, not decoration: one hue per element kind, from the generated
 // category palette, and the SAME four OpenVideo's timeline uses, so a video
 // clip is the same colour in both apps.
@@ -1004,130 +1103,6 @@ function fmtTC(t: number, fps: number) {
   if (f >= fps) f = fps - 1;
   const p = (n: number) => String(n).padStart(2, "0");
   return `${p(m)}:${p(s)}.${p(f)}`;
-}
-
-function Timeline({
-  html,
-  fps,
-  time,
-  duration,
-  playing,
-  selected,
-  onSelect,
-  onSeek,
-  onTogglePlay,
-}: {
-  html: string;
-  fps: number;
-  time: number;
-  duration: number;
-  playing: boolean;
-  selected: number | null;
-  onSelect: (index: number) => void;
-  onSeek: (t: number) => void;
-  onTogglePlay: () => void;
-}) {
-  const areaRef = useRef<HTMLDivElement>(null);
-  const { clips, tracks } = parseClips(html);
-  const dur = Math.max(duration, 0.1);
-  const rows = Array.from({ length: tracks }, (_, i) => tracks - 1 - i); // highest track on top
-  const ticks = Array.from({ length: Math.ceil(dur) }, (_, i) => i + 1).filter((s) => s <= dur + 0.001);
-  const pct = (t: number) => `${Math.max(0, Math.min(t / dur, 1)) * 100}%`;
-
-  function seekAt(clientX: number) {
-    const r = areaRef.current?.getBoundingClientRect();
-    if (!r) return;
-    onSeek(((clientX - r.left) / r.width) * dur);
-  }
-  function onPointerDown(e: React.PointerEvent) {
-    seekAt(e.clientX);
-    const move = (ev: PointerEvent) => seekAt(ev.clientX);
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  }
-
-  return (
-    <div className={`${card} text-foreground overflow-hidden select-none`}>
-      {/* transport */}
-      <div className="flex items-center gap-2 px-3 h-9 border-b border-border">
-        <button
-          onClick={onTogglePlay}
-          className={btnIcon}
-          aria-label={playing ? "Pause" : "Play"}
-          title={playing ? "Pause" : "Play"}
-        >
-          {playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-        </button>
-      </div>
-
-      <div className="flex">
-        <div className="shrink-0 border-r border-border w-28">
-          {/* current-time readout in the corner (Remotion-style) */}
-          <div className="h-7 flex items-center px-3 border-b border-border text-data tabular-nums">
-            {fmtTC(time, fps)}
-          </div>
-          {rows.map((tr) => (
-            <div
-              key={tr}
-              className="h-10 flex items-center px-3 text-fine text-muted border-b border-border"
-            >
-              Track {tr + 1}
-            </div>
-          ))}
-        </div>
-
-        <div className="relative flex-1 cursor-pointer bg-background" ref={areaRef} onPointerDown={onPointerDown}>
-          <div className="relative h-7 border-b border-border">
-            {ticks.map((s) => (
-              <div key={s} className="absolute top-0 h-full border-l border-border" style={{ left: pct(s) }}>
-                <span className="absolute left-1 top-1 text-[10px] text-faint">{fmtTC(s, fps)}</span>
-              </div>
-            ))}
-          </div>
-
-          {rows.map((tr) => (
-            <div key={tr} className="relative h-10 border-b border-border">
-              {clips
-                .filter((c) => c.track === tr)
-                .map((c) => (
-                  <div
-                    key={c.index}
-                    onPointerDown={(e) => {
-                      e.stopPropagation(); // select, don't scrub
-                      onSelect(c.index);
-                    }}
-                    className={`absolute top-1 bottom-1 rounded-sm flex items-center gap-1.5 pl-1.5 pr-2 text-fine overflow-hidden cursor-pointer ${CLIP_FILL[c.type]} ${
-                      c.index === selected ? "ring-2 ring-offset-1 ring-ring ring-offset-surface" : ""
-                    }`}
-                    style={{ left: pct(c.start), width: pct(c.duration) }}
-                    title={`${c.label} · ${c.start}s–${c.start + c.duration}s`}
-                  >
-                    <span className={`w-0.5 self-stretch my-0.5 rounded-full shrink-0 ${CLIP_BAR[c.type]}`} />
-                    {clipIcon(c.type)}
-                    <span className="truncate">{c.label}</span>
-                  </div>
-                ))}
-            </div>
-          ))}
-
-          <div className="absolute top-0 bottom-0 w-px bg-foreground pointer-events-none z-10" style={{ left: pct(time) }}>
-            <div className="absolute -top-0.5 -translate-x-1/2 w-3 h-3 rounded-sm bg-foreground" />
-          </div>
-        </div>
-      </div>
-
-      {clips.length === 0 && (
-        <div className="px-3 py-3 text-fine text-muted">
-          No timed clips yet. Add elements with <code>class="clip"</code> + <code>data-start</code> /{" "}
-          <code>data-duration</code> / <code>data-track-index</code> in the Compose tab.
-        </div>
-      )}
-    </div>
-  );
 }
 
 // ── inspector ────────────────────────────────────────────────────────
