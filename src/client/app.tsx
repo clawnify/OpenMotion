@@ -1,4 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  openChat,
+  reportLocation,
+  useChatContext,
+  useHasChat,
+  useHostChanges,
+  useHostNavigate,
+} from "@clawnify/app/client";
 import { STARTER_HTML } from "./starter";
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import {
@@ -18,11 +26,18 @@ import {
   Music,
   AlertCircle,
   X,
+  ChevronDown,
+  Sparkles,
 } from "lucide-react";
 import {
   Badge,
+  Command,
+  CommandItem,
   ConfirmDialog,
   EmptyState,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
   btnDanger,
   btnGhost,
   btnIcon,
@@ -104,6 +119,11 @@ function useRouter() {
     window.history.pushState(null, "", to);
     setPath(to);
   }, []);
+  // Inside Clawnify: tell the dashboard where we are (so a reload or a shared
+  // link restores this view), and let its chat open a video it just made
+  // through this router instead of reloading the whole app.
+  useEffect(() => reportLocation(path), [path]);
+  useHostNavigate((to) => navigate(new URL(to, window.location.origin).pathname));
   return { path, navigate };
 }
 
@@ -151,10 +171,15 @@ function fmtDate(s: string): string {
 function Gallery({ navigate }: { navigate: (to: string) => void }) {
   const [comps, setComps] = useState<Composition[] | null>(null);
   const [creating, setCreating] = useState(false);
+  const hasChat = useHasChat();
 
-  useEffect(() => {
+  const load = useCallback(() => {
     api.get<Composition[]>("/api/compositions").then(setComps).catch(() => setComps([]));
   }, []);
+  useEffect(load, [load]);
+  // The agent made or changed a video from the chat: show it without a reload.
+  useHostChanges(load);
+  useChatContext({ label: "Videos" });
 
   async function newVideo() {
     setCreating(true);
@@ -190,12 +215,14 @@ function Gallery({ navigate }: { navigate: (to: string) => void }) {
             </p>
           </div>
           {comps && comps.length > 0 && (
-            <button onClick={newVideo} disabled={creating} className={`${btnPrimary} shrink-0`}>
+            <button onClick={newVideo} disabled={creating} className={`${hasChat ? btnSecondary : btnPrimary} shrink-0`}>
               {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
               New video
             </button>
           )}
         </div>
+
+        {hasChat && <DescribeVideo />}
 
         {comps === null ? (
           /* Loading is the shape of the answer, never a spinner. */
@@ -214,9 +241,13 @@ function Gallery({ navigate }: { navigate: (to: string) => void }) {
           <EmptyState
             icon={<Video className="w-8 h-8" />}
             title="No videos yet"
-            body="Start from a working title card and change the words."
+            body={
+              hasChat
+                ? "Describe one above, or start from a working title card and change the words."
+                : "Start from a working title card and change the words."
+            }
             action={
-              <button onClick={newVideo} disabled={creating} className={btnPrimary}>
+              <button onClick={newVideo} disabled={creating} className={hasChat ? btnSecondary : btnPrimary}>
                 <Plus className="w-4 h-4" /> New video
               </button>
             }
@@ -249,6 +280,48 @@ function Gallery({ navigate }: { navigate: (to: string) => void }) {
 
       </div>
     </main>
+  );
+}
+
+/**
+ * Where a video starts from words. The prompt goes to the agent's chat as a
+ * DRAFT: the user reads it there and presses send, so nothing runs on their
+ * behalf from a box in someone else's app. Rendered only when there is a chat
+ * to open (inside Clawnify); standalone the gallery keeps its button.
+ */
+function DescribeVideo() {
+  const [text, setText] = useState("");
+  const brief = text.trim();
+
+  function ask() {
+    if (!brief) return;
+    if (openChat(`Make a new video in OpenMotion: ${brief}`)) setText("");
+  }
+
+  return (
+    <div className="mb-6">
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            ask();
+          }
+        }}
+        rows={2}
+        maxLength={1800}
+        aria-label="Describe a video"
+        placeholder="Describe a video: what it is for, how long, vertical or landscape, the mood. A 15-second vertical teaser for our launch, bold type, fast cuts."
+        className="field resize-none"
+      />
+      <div className="flex items-center justify-between gap-3 mt-2">
+        <span className="text-fine text-faint">Opens the chat with this as a draft. Nothing is sent until you press send.</span>
+        <button onClick={ask} disabled={!brief} className={`${btnPrimary} shrink-0`}>
+          <Sparkles className="w-4 h-4" /> Ask AI
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -319,6 +392,14 @@ function Editor({
   });
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // What the server holds, as far as this editor knows. Local HTML that
+  // differs from it is unsaved work the agent's changes must not overwrite.
+  const saved = useRef({ name: comp.name, html: comp.html, fps: comp.fps });
+  // The agent's version, held back while there is unsaved work.
+  const [incoming, setIncoming] = useState<Composition | null>(null);
+  // Bumped on every write the chat makes, so the panels refetch.
+  const [changes, setChanges] = useState(0);
+  const hasChat = useHasChat();
 
   // Selected clip (by index) for the right-side inspector.
   const [selectedClip, setSelectedClip] = useState<number | null>(null);
@@ -398,6 +479,38 @@ function Editor({
   const poster = posterTime(html);
   const selClip = selectedClip != null ? clips.find((c) => c.index === selectedClip) ?? null : null;
 
+  // The chat knows which video is open, so "make the title slower" means this one.
+  useChatContext({ label: "Video", record: { type: "composition", id: comp.id, label: name } });
+
+  function adopt(next: Composition) {
+    saved.current = { name: next.name, html: next.html, fps: next.fps };
+    setHtml(next.html);
+    setName(next.name);
+    setFps(next.fps);
+    setIncoming(null);
+    restoreRef.current = timeRef.current; // keep the playhead where it was
+    setPreviewKey((k) => k + 1);
+  }
+
+  // The agent wrote through the chat. Take its version of this video unless
+  // the user has unsaved work, in which case ask instead of overwriting it.
+  useHostChanges(async (paths) => {
+    setChanges((n) => n + 1);
+    if (!paths.some((p) => p.startsWith(`/api/compositions/${comp.id}`))) return;
+    const next = await api.get<Composition>(`/api/compositions/${comp.id}`).catch(() => null);
+    if (!next) return;
+    const s0 = saved.current;
+    if (next.html === s0.html && next.name === s0.name && next.fps === s0.fps) return;
+    const dirty = html !== s0.html || name !== s0.name || fps !== s0.fps;
+    if (dirty) setIncoming(next);
+    else adopt(next);
+  });
+
+  function askAI() {
+    const about = selClip ? `, on the ${selClip.type} "${selClip.label}" (at ${selClip.start}s)` : "";
+    openChat(`In the OpenMotion video "${name}"${about}: `);
+  }
+
   useEffect(() => {
     winRef.current = selClip ? { start: selClip.start, end: selClip.start + selClip.duration } : null;
     const w = winRef.current;
@@ -433,6 +546,7 @@ function Editor({
       setSaving(true);
       try {
         await api.send("PUT", `/api/compositions/${comp.id}`, { name, html: next, fps });
+        saved.current = { name, html: next, fps };
       } finally {
         setSaving(false);
       }
@@ -445,6 +559,8 @@ function Editor({
     setSaving(true);
     try {
       await api.send("PUT", `/api/compositions/${comp.id}`, { name, html, fps });
+      saved.current = { name, html, fps };
+      setIncoming(null);
       setPreviewKey((k) => k + 1); // reload iframe
       setTime(poster);
     } finally {
@@ -520,7 +636,19 @@ function Editor({
         {/* timeline + options */}
         <Panel id="dock" defaultSize="32%" minSize="16%" maxSize="60%" className="flex flex-col bg-background min-h-0">
           {/* view switcher: a segmented track, active segment raised white */}
-          <div className="px-5 pt-3 shrink-0">
+          {incoming && (
+            <div role="status" className="mx-5 mt-3 flex items-center gap-3 rounded-sm bg-warning-tint px-3 py-2 text-body-sm text-warning">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span className="flex-1 min-w-0">The agent changed this video while you had unsaved edits.</span>
+              <button onClick={() => adopt(incoming)} className={btnSecondary}>
+                Load its version
+              </button>
+              <button onClick={() => setIncoming(null)} className={btnGhost}>
+                Keep mine
+              </button>
+            </div>
+          )}
+          <div className="px-5 pt-3 shrink-0 flex items-center justify-between gap-3">
             <div className="inline-flex items-center gap-0.5 rounded-full bg-surface-sunken p-0.5">
               {(["timeline", "compose", "media", "renders"] as Tab[]).map((t) => (
                 <button
@@ -535,6 +663,11 @@ function Editor({
                 </button>
               ))}
             </div>
+            {hasChat && (
+              <button onClick={askAI} className={btnSecondary}>
+                <Sparkles className="w-4 h-4" /> Ask AI
+              </button>
+            )}
           </div>
 
           <div className="flex-1 overflow-y-auto p-5 pt-3 min-h-0">
@@ -548,18 +681,7 @@ function Editor({
                 placeholder="Composition name"
                 aria-label="Composition name"
               />
-              <label className="flex items-center gap-2 text-label text-muted">
-                fps
-                <select
-                  value={fps}
-                  onChange={(e) => setFps(Number(e.target.value))}
-                  className="field w-auto"
-                >
-                  <option value={24}>24</option>
-                  <option value={30}>30</option>
-                  <option value={60}>60</option>
-                </select>
-              </label>
+              <FpsPicker fps={fps} onChange={setFps} />
             </div>
             <textarea
               value={html}
@@ -592,12 +714,55 @@ function Editor({
             onTogglePlay={togglePlay}
           />
         )}
-        {tab === "media" && <MediaPanel />}
-        {tab === "renders" && <RendersPanel comp={comp} />}
+        {tab === "media" && <MediaPanel changes={changes} />}
+        {tab === "renders" && <RendersPanel comp={comp} changes={changes} />}
           </div>
         </Panel>
       </Group>
     </main>
+  );
+}
+
+// ── frame rate ───────────────────────────────────────────────────────
+
+const FPS_OPTIONS = [
+  { fps: 24, name: "Film", hint: "The cinematic cadence" },
+  { fps: 30, name: "Standard", hint: "Social and web" },
+  { fps: 60, name: "Smooth", hint: "Fast motion and UI demos" },
+];
+
+function FpsPicker({ fps, onChange }: { fps: number; onChange: (fps: number) => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button className="field w-auto flex items-center gap-2 text-left" aria-label="Frame rate">
+          <span className="tabular-nums">{fps} fps</span>
+          <ChevronDown className="w-4 h-4 shrink-0 text-faint" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent>
+        <Command label="Frame rate">
+          {FPS_OPTIONS.map((o) => (
+            <CommandItem
+              key={o.fps}
+              value={String(o.fps)}
+              onSelect={() => {
+                setOpen(false);
+                onChange(o.fps);
+              }}
+            >
+              <span className="flex-1 min-w-0">
+                <span className="block truncate">{o.name}</span>
+                <span className="block truncate text-fine text-faint">{o.hint}</span>
+              </span>
+              <span className="text-fine text-muted tabular-nums">{o.fps} fps</span>
+              <Check className={`w-4 h-4 shrink-0 ${o.fps === fps ? "" : "invisible"}`} />
+            </CommandItem>
+          ))}
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -1005,7 +1170,7 @@ function toHex(color: string): string {
 
 // ── media ────────────────────────────────────────────────────────────
 
-function MediaPanel() {
+function MediaPanel({ changes }: { changes: number }) {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [copied, setCopied] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -1017,7 +1182,7 @@ function MediaPanel() {
   }
   useEffect(() => {
     load();
-  }, []);
+  }, [changes]);
 
   async function upload(files: FileList | null) {
     if (!files?.length) return;
@@ -1137,7 +1302,7 @@ const RENDER_TONE: Record<RenderJob["status"], string> = {
   failed: "danger",
 };
 
-function RendersPanel({ comp }: { comp: Composition }) {
+function RendersPanel({ comp, changes }: { comp: Composition; changes: number }) {
   const [jobs, setJobs] = useState<RenderJob[]>([]);
   const [rendering, setRendering] = useState(false);
   const [err, setErr] = useState("");
@@ -1148,7 +1313,7 @@ function RendersPanel({ comp }: { comp: Composition }) {
   }
   useEffect(() => {
     load();
-  }, [comp.id]);
+  }, [comp.id, changes]);
 
   async function render() {
     setRendering(true);

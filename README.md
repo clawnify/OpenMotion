@@ -12,6 +12,7 @@ Agents are already good at writing motion graphics as code. Where it gets hard i
 
 ## Features
 
+- **Describe a video**: inside Clawnify, write what you want (what it is for, how long, vertical or landscape) and your AI agent builds it. **Ask AI** in the editor changes the video on screen, and the preview updates in place.
 - **Timeline editor**: tracks, clips, a time ruler and a draggable playhead that scrubs the preview. Clips are read straight from the composition's timing attributes.
 - **Live preview**: one clock keeps the preview and the timeline in sync.
 - **Bring your own media**: upload logos and product clips and reference them by path (`assets/your-logo.png`) in the HTML.
