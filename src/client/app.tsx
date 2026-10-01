@@ -29,10 +29,11 @@ import {
   X,
   ChevronDown,
   Sparkles,
+  Download,
 } from "lucide-react";
 import {
-  Badge,
   Command,
+  CommandGroup,
   CommandItem,
   ConfirmDialog,
   EmptyState,
@@ -105,7 +106,7 @@ const api = {
 
 // ── app ──────────────────────────────────────────────────────────────
 
-type Tab = "compose" | "timeline" | "media" | "renders";
+type Tab = "compose" | "timeline" | "media";
 
 // Minimal history-based router: `/` = gallery, `/<id>` = editor for that id.
 function useRouter() {
@@ -570,7 +571,8 @@ function Editor({
   });
 
   function askAI() {
-    const about = selClip ? `, on the ${selClip.type} "${selClip.label}" (at ${selClip.start}s)` : "";
+    const words = selClip ? selClip.text.replace(/\n+/g, " ").slice(0, 80) || selClip.label : "";
+    const about = selClip ? `, on the ${selClip.type} "${words}" (at ${selClip.start}s)` : "";
     openChat(`In the OpenMotion video "${name}"${about}: `);
   }
 
@@ -713,7 +715,7 @@ function Editor({
           )}
           <div className="px-5 pt-3 shrink-0 flex items-center justify-between gap-3">
             <div className="inline-flex items-center gap-0.5 rounded-full bg-surface-sunken p-0.5">
-              {(["timeline", "compose", "media", "renders"] as Tab[]).map((t) => (
+              {(["timeline", "compose", "media"] as Tab[]).map((t) => (
                 <button
                   key={t}
                   onClick={() => setTab(t)}
@@ -726,11 +728,14 @@ function Editor({
                 </button>
               ))}
             </div>
-            {hasChat && (
-              <button onClick={askAI} className={btnSecondary}>
-                <Sparkles className="w-4 h-4" /> Ask AI
-              </button>
-            )}
+            <div className="flex items-center gap-2">
+              {hasChat && (
+                <button onClick={askAI} className={btnSecondary}>
+                  <Sparkles className="w-4 h-4" /> Ask AI
+                </button>
+              )}
+              <ExportMenu comp={{ ...comp, name }} changes={changes} />
+            </div>
           </div>
 
           <div className="flex-1 overflow-y-auto p-5 pt-3 min-h-0">
@@ -778,7 +783,6 @@ function Editor({
           />
         )}
         {tab === "media" && <MediaPanel changes={changes} />}
-        {tab === "renders" && <RendersPanel comp={comp} changes={changes} />}
           </div>
         </Panel>
       </Group>
@@ -839,10 +843,33 @@ interface Clip {
   track: number;
   type: ClipType;
   label: string;
+  /** The words, with each `<br>` as a line break. */
   text: string;
+  /** Built from styled parts (spans, links): editing it as plain text would flatten them. */
+  rich: boolean;
   color: string;
   fontSize: string;
   src: string;
+}
+
+/**
+ * An element's words as they read on screen: whitespace collapsed as HTML
+ * does, and each `<br>` kept as a line break. textContent drops `<br>`, which
+ * fused "Type.<br>Motion." into "Type.Motion." in labels and prompts.
+ */
+function textOf(el: Element): string {
+  let out = "";
+  const walk = (n: Node) => {
+    if (n.nodeType === 3) out += (n.textContent || "").replace(/\s+/g, " ");
+    else if (n.nodeName === "BR") out += "\n";
+    else n.childNodes.forEach(walk);
+  };
+  el.childNodes.forEach(walk);
+  return out
+    .split("\n")
+    .map((line) => line.trim())
+    .join("\n")
+    .trim();
 }
 
 /** Parse HyperFrames `.clip` elements out of the composition HTML into tracks. */
@@ -855,8 +882,8 @@ function parseClips(html: string): { clips: Clip[]; tracks: number } {
       const tag = el.tagName.toLowerCase();
       const type: ClipType =
         tag === "video" ? "video" : tag === "img" ? "image" : tag === "audio" ? "audio" : "text";
-      const text = (el.textContent || "").trim().replace(/\s+/g, " ");
-      const label = text.slice(0, 28) || type[0].toUpperCase() + type.slice(1);
+      const text = textOf(el);
+      const label = text.replace(/\n+/g, " ").slice(0, 28) || type[0].toUpperCase() + type.slice(1);
       return {
         index,
         start: parseFloat(el.getAttribute("data-start") || "0") || 0,
@@ -865,6 +892,7 @@ function parseClips(html: string): { clips: Clip[]; tracks: number } {
         type,
         label,
         text,
+        rich: Array.from(el.children).some((c) => c.tagName !== "BR"),
         color: (el as HTMLElement).style?.color || "",
         fontSize: (el as HTMLElement).style?.fontSize || "",
         src: el.getAttribute("src") || "",
@@ -911,7 +939,15 @@ function applyClipPatch(html: string, index: number, patch: ClipPatch): string {
     const root = doc.querySelector("[data-composition-id]");
     const el = doc.querySelectorAll(".clip")[index] as HTMLElement | undefined;
     if (!root || !el) return html;
-    if (patch.text !== undefined) el.textContent = patch.text;
+    // Only plain text (words and <br>s) is rewritten; one with styled parts
+    // keeps them, so the inspector shows it read-only instead.
+    if (patch.text !== undefined && !Array.from(el.children).some((c) => c.tagName !== "BR")) {
+      el.textContent = "";
+      patch.text.split("\n").forEach((line, i) => {
+        if (i) el.appendChild(doc.createElement("br"));
+        el.appendChild(doc.createTextNode(line));
+      });
+    }
     if (patch.color !== undefined) el.style.color = patch.color;
     if (patch.fontSize !== undefined) el.style.fontSize = patch.fontSize;
     if (patch.src !== undefined) el.setAttribute("src", patch.src);
@@ -1149,7 +1185,21 @@ function Inspector({
         {clip.type === "text" && (
           <>
             <Field label="Text">
-              <input className={inputCls} value={clip.text} onChange={(e) => onChange({ text: e.target.value })} />
+              {clip.rich ? (
+                <p className="text-body-sm text-muted whitespace-pre-line">
+                  {clip.text}
+                  <span className="block mt-1 text-fine text-faint">
+                    Styled in parts. Change it in Compose, or ask the AI.
+                  </span>
+                </p>
+              ) : (
+                <textarea
+                  className={`${inputCls} resize-none`}
+                  rows={Math.min(4, Math.max(1, clip.text.split("\n").length))}
+                  value={clip.text}
+                  onChange={(e) => onChange({ text: e.target.value })}
+                />
+              )}
             </Field>
             <Field label="Color">
               <div className="flex items-center gap-2">
@@ -1364,86 +1414,121 @@ function MediaPanel({ changes }: { changes: number }) {
   );
 }
 
-// ── renders ──────────────────────────────────────────────────────────
+// ── export ───────────────────────────────────────────────────────────
 
-// Tinted badge = a signal that demands attention (vs a chip, which is a fact).
-const RENDER_TONE: Record<RenderJob["status"], string> = {
-  rendering: "warning",
-  completed: "success",
-  failed: "danger",
-};
-
-function RendersPanel({ comp, changes }: { comp: Composition; changes: number }) {
-  const [jobs, setJobs] = useState<RenderJob[]>([]);
-  const [rendering, setRendering] = useState(false);
+/**
+ * Export is the only place a video is rendered. The preview is the video
+ * frame for frame, so making or changing one never needs a render; a file is
+ * made only when someone wants one, and it downloads as soon as it is ready.
+ * Each export also lands in the media library, so it can be reused as footage.
+ */
+function ExportMenu({ comp, changes }: { comp: Composition; changes: number }) {
+  const [open, setOpen] = useState(false);
+  // null = not loaded yet: never claim "no exports" before we know.
+  const [jobs, setJobs] = useState<RenderJob[] | null>(null);
+  const [exportingSince, setExportingSince] = useState<number | null>(null);
+  const [elapsed, setElapsed] = useState(0);
   const [err, setErr] = useState("");
 
   async function load() {
-    const all = await api.get<RenderJob[]>("/api/renders");
-    setJobs(all.filter((j) => j.composition_id === comp.id));
+    const all = await api.get<RenderJob[]>("/api/renders").catch(() => null);
+    if (all) setJobs(all.filter((j) => j.composition_id === comp.id));
   }
   useEffect(() => {
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [comp.id, changes]);
 
-  async function render() {
-    setRendering(true);
+  useEffect(() => {
+    if (exportingSince == null) return;
+    const t = setInterval(() => setElapsed(Math.floor((Date.now() - exportingSince) / 1000)), 1000);
+    return () => clearInterval(t);
+  }, [exportingSince]);
+
+  function download(job: RenderJob) {
+    if (!job.output_url) return;
+    const a = document.createElement("a");
+    a.href = job.output_url;
+    a.download = `${comp.name || "video"}.mp4`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  async function exportMp4() {
+    setOpen(false);
     setErr("");
+    setElapsed(0);
+    setExportingSince(Date.now());
     try {
-      await api.send("POST", "/api/renders", { composition_id: comp.id });
-      await load();
+      const job = await api.send<RenderJob>("POST", "/api/renders", { composition_id: comp.id });
+      if (job.status === "completed") download(job);
+      else setErr(job.error || "The export failed.");
     } catch (e) {
       setErr(String((e as Error).message || e));
     } finally {
-      setRendering(false);
+      setExportingSince(null);
+      load();
     }
   }
 
-  return (
-    <div className="max-w-3xl space-y-4">
-      <button onClick={render} disabled={rendering} className={btnPrimary}>
-        {rendering ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-        {rendering ? "Rendering… (this can take a minute)" : "Render MP4"}
-      </button>
+  const done = (jobs ?? []).filter((j) => j.status === "completed" && j.output_url);
+  const exporting = exportingSince != null;
 
+  return (
+    <>
       {err && (
-        <div className="flex items-start gap-2 rounded-sm bg-danger-tint px-3 py-2 text-body-sm text-danger">
+        <div role="alert" className="fixed bottom-4 right-4 z-50 flex max-w-md items-start gap-2 rounded-sm bg-danger-tint px-3 py-2 text-body-sm text-danger shadow-float">
           <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
-          <span className="break-words">{err}</span>
+          <span className="flex-1 break-words">Export failed: {err}</span>
+          <button onClick={() => setErr("")} className={btnIcon} aria-label="Dismiss">
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
-
-      <div className="space-y-2">
-        {jobs.map((j) => (
-          <div key={j.id} className={`${card} p-3`}>
-            {j.status === "completed" && j.output_url ? (
-              <video src={j.output_url} controls className="w-full max-w-md rounded-md bg-black" />
-            ) : j.status === "failed" ? (
-              <div className="flex items-start gap-2 text-body-sm text-danger">
-                <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
-                <span className="break-words">{j.error || "Render failed"}</span>
+      <Popover open={open} onOpenChange={(o) => !exporting && setOpen(o)}>
+        <PopoverTrigger asChild>
+          <button disabled={exporting} className={btnPrimary}>
+            {exporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+            {exporting ? `Exporting… ${elapsed}s` : "Export"}
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="end">
+          <Command label="Export">
+            <CommandItem value="export-mp4" onSelect={exportMp4}>
+              <Film className="w-4 h-4 shrink-0 text-muted" />
+              <span className="flex-1 min-w-0">
+                <span className="block truncate">Export MP4</span>
+                <span className="block truncate text-fine text-faint">Up to a minute, then it downloads</span>
+              </span>
+            </CommandItem>
+            {jobs === null ? (
+              <div className="px-2 py-2">
+                <div className="h-3 w-2/3 rounded-full bg-surface-sunken animate-pulse" />
               </div>
             ) : (
-              <div className="flex items-center gap-2 text-body-sm text-muted">
-                <Loader2 className="w-4 h-4 animate-spin" /> Rendering…
-              </div>
+              done.length > 0 && (
+                <CommandGroup heading="Earlier exports">
+                  {done.map((j) => (
+                    <CommandItem key={j.id} value={`export-${j.id}`} onSelect={() => download(j)}>
+                      <Download className="w-4 h-4 shrink-0 text-muted" />
+                      <span className="flex-1 truncate tabular-nums">{fmtExportDate(j.created_at)}</span>
+                      <span className="text-fine text-faint">Download</span>
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              )
             )}
-            <div className="flex items-center gap-2 mt-2 text-fine text-faint tabular-nums">
-              <Badge tone={RENDER_TONE[j.status]}>{j.status}</Badge>
-              <span>
-                #{j.id} · {new Date(j.created_at + "Z").toLocaleString()}
-              </span>
-            </div>
-          </div>
-        ))}
-        {jobs.length === 0 && (
-          <EmptyState
-            icon={<Film className="w-8 h-8" />}
-            title="No renders yet"
-            body="Rendering runs the composition on the managed render service and hands back an MP4. It also lands in your media library."
-          />
-        )}
-      </div>
-    </div>
+          </Command>
+        </PopoverContent>
+      </Popover>
+    </>
   );
+}
+
+function fmtExportDate(s: string): string {
+  const d = new Date(s.replace(" ", "T") + "Z");
+  return isNaN(d.getTime())
+    ? s
+    : d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }

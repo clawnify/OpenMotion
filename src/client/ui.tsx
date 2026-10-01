@@ -224,6 +224,17 @@ export function Command({ label, children }: { label: string; children: React.Re
   );
 }
 
+export function CommandGroup({ heading, children }: { heading: string; children: React.ReactNode }) {
+  return (
+    <CommandPrimitive.Group
+      heading={heading}
+      className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:text-fine [&_[cmdk-group-heading]]:text-faint"
+    >
+      {children}
+    </CommandPrimitive.Group>
+  );
+}
+
 export function CommandItem({
   value,
   onSelect,

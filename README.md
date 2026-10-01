@@ -16,7 +16,7 @@ Agents are already good at writing motion graphics as code. Where it gets hard i
 - **Timeline editor**: tracks, clips, a time ruler and a draggable playhead that scrubs the preview. Clips are read straight from the composition's timing attributes.
 - **Live preview**: one clock keeps the preview and the timeline in sync.
 - **Bring your own media**: upload logos and product clips and reference them by path (`assets/your-logo.png`) in the HTML.
-- **One-click render**: produces a real MP4, kept in your media library.
+- **Export when you need a file**: the preview is the video, so nothing renders until you export. Export makes a real MP4, downloads it and keeps it in your media library.
 - **Agent-ready**: a REST API (`/api/compositions`, `/api/assets`, `/api/renders`) and an `agent.md`, so an agent can author and render videos on its own.
 
 ## How a composition works
@@ -27,11 +27,12 @@ A composition is one HTML fragment. The root carries the canvas size and the len
 <div id="root" data-composition-id="promo" data-duration="6.5" data-width="1920" data-height="1080">
   <img src="assets/logo.png" class="clip" data-start="0" data-duration="6" data-track-index="0" />
   <h1 id="title" class="clip" data-start="0.5" data-duration="6" data-track-index="0"
-      style="position:absolute;top:48%;left:50%;transform:translate(-50%,-50%);color:#fff;font-size:90px">
+      style="position:absolute;top:48%;left:50%;color:#fff;font-size:90px">
     Introducing Northwind
   </h1>
   <script src="https://cdn.jsdelivr.net/npm/gsap@3/dist/gsap.min.js"></script>
   <script>
+    gsap.set("#title", { xPercent: -50, yPercent: -50 }); // centre it with GSAP, not CSS
     const tl = gsap.timeline({ paused: true });
     tl.from("#title", { opacity: 0, y: 40, duration: 1 }, 0.5);
     window.__timelines = { promo: tl };
@@ -48,7 +49,7 @@ pnpm install
 pnpm dev        # UI on :5173, API on :8787, with a local SQLite database and storage
 ```
 
-Hit **New video** and pick a shape (landscape, vertical or square) for a starter, edit the HTML in **Compose**, drop media in **Media**, scrub the timeline, and render from **Renders**.
+Hit **New video** and pick a shape (landscape, vertical or square) for a starter, edit the HTML in **Compose**, drop media in **Media**, scrub the timeline, and **Export** an MP4 when you need the file.
 
 ## Deploy
 
