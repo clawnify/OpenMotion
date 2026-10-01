@@ -6,9 +6,11 @@
 // its own module for exactly that reason (see .design-lint-ignore).
 //
 // Three clips on three separate tracks with a staggered GSAP timeline, so
-// the timeline view shows real track registration. Kept as a string rather
-// than a DB seed so it goes in via the normal parameterized insert.
-export const STARTER_HTML = `<div id="root" data-composition-id="untitled" data-start="0" data-width="1920" data-height="1080"
+// the timeline view shows real track registration. The root states the
+// length (data-duration): the entrances finish at 1.7 s, and without it
+// HyperFrames would render only that much. Kept as a string rather than a DB
+// seed so it goes in via the normal parameterized insert.
+export const STARTER_HTML = `<div id="root" data-composition-id="untitled" data-start="0" data-duration="5" data-width="1920" data-height="1080"
      style="width:1920px;height:1080px;background:#0b1020;position:relative;overflow:hidden;font-family:Inter,system-ui,sans-serif">
   <div id="kicker" class="clip" data-start="0" data-duration="5" data-track-index="2"
        style="position:absolute;top:34%;left:50%;transform:translate(-50%,-50%);color:#7c8cff;font-size:28px;font-weight:700;letter-spacing:4px;text-transform:uppercase;white-space:nowrap">

@@ -38,13 +38,14 @@ version, so a write never silently replaces their work.
 ## Composition format (HyperFrames)
 
 A composition is one HTML fragment with a root element carrying
-`data-composition-id`, `data-width`, `data-height`. Timed elements get
+`data-composition-id`, `data-width`, `data-height` and `data-duration` (the
+video's length in seconds). Timed elements get
 `class="clip"` plus `data-start` / `data-duration` (seconds) /
 `data-track-index`. Animate with a **paused** GSAP timeline registered on
 `window.__timelines[<composition-id>]`.
 
 ```html
-<div id="root" data-composition-id="promo" data-start="0" data-width="1920" data-height="1080"
+<div id="root" data-composition-id="promo" data-start="0" data-duration="8" data-width="1920" data-height="1080"
      style="width:1920px;height:1080px;background:#0b1020;position:relative;font-family:sans-serif">
   <img src="assets/logo.png" class="clip" data-start="0" data-duration="6" data-track-index="0"
        style="position:absolute;top:80px;left:80px;width:160px" />
@@ -66,6 +67,16 @@ A composition is one HTML fragment with a root element carrying
 
 Keep `data-composition-id` unique per composition and matching the
 `window.__timelines` key.
+
+### Length: always set the root's `data-duration`
+
+The root's `data-duration` is where the render stops. Set it to when the last
+clip ends, or later if you want a hold at the end. Without it the renderer
+takes the length of your GSAP timeline, which usually ends when the entrances
+finish: clips that run to 8 s would render as a 2 s video. The app guards
+against this (the preview, the timeline and the render all fall back to where
+the last clip ends), but state the length so the video is the one you meant.
+When you lengthen a composition, raise `data-duration` with it.
 
 ## Embedding the user's media
 

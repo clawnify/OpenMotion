@@ -8,6 +8,7 @@ import {
   useHostNavigate,
 } from "@clawnify/app/client";
 import { STARTER_HTML } from "./starter";
+import { compositionLength } from "../shared/length";
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import {
   ArrowLeft,
@@ -827,8 +828,7 @@ function parseClips(html: string): { clips: Clip[]; tracks: number } {
  * entrances, before any outro.
  */
 export function posterTime(html: string): number {
-  const { clips } = parseClips(html);
-  const end = clips.reduce((max, c) => Math.max(max, c.start + c.duration), 0);
+  const end = compositionLength(html) ?? 0;
   return end > 0 ? Math.round((end / 2) * 100) / 100 : 0;
 }
 
@@ -856,6 +856,15 @@ function applyClipPatch(html: string, index: number, patch: ClipPatch): string {
     if (patch.start !== undefined) el.setAttribute("data-start", String(patch.start));
     if (patch.duration !== undefined) el.setAttribute("data-duration", String(patch.duration));
     if (patch.track !== undefined) el.setAttribute("data-track-index", String(patch.track));
+    // A stated length is where the render stops. Moving a clip's end past it
+    // would cut the clip off in the MP4 while the timeline still shows it, so
+    // the length follows the clip out. It never shrinks on its own: a hold
+    // after the last clip can be deliberate.
+    const length = parseFloat(root.getAttribute("data-duration") || "");
+    if (length > 0 && (patch.start !== undefined || patch.duration !== undefined)) {
+      const end = (parseFloat(el.getAttribute("data-start") || "0") || 0) + (parseFloat(el.getAttribute("data-duration") || "0") || 0);
+      if (end > length) root.setAttribute("data-duration", String(Math.round(end * 100) / 100));
+    }
     return root.outerHTML;
   } catch {
     return html;
