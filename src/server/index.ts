@@ -9,6 +9,7 @@ import {
   makeKey,
 } from "./uploads";
 import { renderComposition } from "./render";
+import { compositionLength, withLength } from "../shared/length";
 
 type Bindings = {
   DB: D1Database;
@@ -245,7 +246,9 @@ app.post("/api/renders", async (c) => {
   try {
     const assets = await query<Asset>("SELECT key FROM assets");
     const mp4 = await renderComposition({
-      html: comp.html,
+      // Stated on the root, so the MP4 is as long as the preview and the
+      // timeline say (see shared/length.ts).
+      html: withLength(comp.html),
       fps: comp.fps,
       assets,
       filename: `${makeKey(comp.name)}.mp4`,
@@ -262,7 +265,7 @@ app.post("/api/renders", async (c) => {
     const assetId = lower16();
     await run(
       "INSERT INTO assets (id, key, name, content_type, size, duration) VALUES (?, ?, ?, 'video/mp4', ?, ?)",
-      [assetId, key, `${comp.name}.mp4`, mp4.byteLength, compositionSeconds(comp.html)],
+      [assetId, key, `${comp.name}.mp4`, mp4.byteLength, compositionLength(comp.html)],
     );
     await run(
       "UPDATE render_jobs SET status = 'completed', output_url = ?, asset_id = ?, updated_at = datetime('now') WHERE id = ?",
@@ -280,20 +283,6 @@ app.post("/api/renders", async (c) => {
 });
 
 // ── helpers ──────────────────────────────────────────────────────────
-
-/** Output length of a composition: the last moment any clip is on screen.
- *  The renderer produces exactly this, and the media library records it as
- *  the rendered clip's duration. */
-function compositionSeconds(html: string): number {
-  let max = 0;
-  const re = /data-start="([\d.]+)"[^>]*data-duration="([\d.]+)"|data-duration="([\d.]+)"[^>]*data-start="([\d.]+)"/g;
-  for (const m of html.matchAll(re)) {
-    const start = parseFloat(m[1] ?? m[4] ?? "0") || 0;
-    const dur = parseFloat(m[2] ?? m[3] ?? "0") || 0;
-    if (start + dur > max) max = start + dur;
-  }
-  return Math.round(max * 100) / 100;
-}
 
 function lower16(): string {
   return lower8() + lower8();
@@ -320,15 +309,10 @@ function previewDoc(html: string): string {
     var seekParam = parseFloat(params.get('seek') || '');
     var loopStart = startAt, loopEnd = isFinite(endParam) ? endParam : Infinity;
     var tls = [], playhead = startAt, playing = params.get('play') === '1', duration = 5, last = 0;
-    function clipDuration() {
-      var max = 0;
-      document.querySelectorAll('.clip').forEach(function (el) {
-        var s = parseFloat(el.getAttribute('data-start') || '0');
-        var d = parseFloat(el.getAttribute('data-duration') || '0');
-        if (s + d > max) max = s + d;
-      });
-      return max;
-    }
+    // The render length, worked out on the server by the same rule the render
+    // uses (shared/length.ts). null: neither the root nor any clip says, so the
+    // timelines decide here exactly as they do in the renderer.
+    var fixedLength = ${JSON.stringify(compositionLength(html))};
     addEventListener('message', function (e) {
       var m = e.data || {};
       if (m.target !== 'hf-preview') return;
@@ -365,7 +349,7 @@ function previewDoc(html: string): string {
       tls = Object.values(window.__timelines || {});
       tls.forEach(function (tl) { try { tl.pause(0); } catch (e) {} });
       var tlMax = tls.reduce(function (a, tl) { try { return Math.max(a, tl.duration()); } catch (e) { return a; } }, 0);
-      duration = Math.max(clipDuration(), tlMax, 0.1);
+      duration = fixedLength != null ? fixedLength : Math.max(tlMax, 0.1);
       if (!isFinite(loopEnd) || loopEnd > duration) loopEnd = duration;
       if (loopStart >= loopEnd) loopStart = 0;
       playhead = isFinite(seekParam) ? Math.max(loopStart, Math.min(seekParam, loopEnd)) : loopStart;

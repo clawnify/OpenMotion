@@ -21,10 +21,10 @@ Agents are already good at writing motion graphics as code. Where it gets hard i
 
 ## How a composition works
 
-A composition is one HTML fragment. The root carries the canvas size; timed elements get `class="clip"` plus `data-start` / `data-duration` (seconds) / `data-track-index`, and animations are registered on a paused GSAP timeline:
+A composition is one HTML fragment. The root carries the canvas size and the length in seconds; timed elements get `class="clip"` plus `data-start` / `data-duration` (seconds) / `data-track-index`, and animations are registered on a paused GSAP timeline:
 
 ```html
-<div id="root" data-composition-id="promo" data-width="1920" data-height="1080">
+<div id="root" data-composition-id="promo" data-duration="6.5" data-width="1920" data-height="1080">
   <img src="assets/logo.png" class="clip" data-start="0" data-duration="6" data-track-index="0" />
   <h1 id="title" class="clip" data-start="0.5" data-duration="6" data-track-index="0"
       style="position:absolute;top:48%;left:50%;transform:translate(-50%,-50%);color:#fff;font-size:90px">
@@ -39,7 +39,7 @@ A composition is one HTML fragment. The root carries the canvas size; timed elem
 </div>
 ```
 
-The editor reads those clips into the timeline automatically.
+The editor reads those clips into the timeline automatically. The root's `data-duration` is where the render stops. On its own, HyperFrames would stop when the GSAP timeline ends (1.5 s here), so when it is missing OpenMotion fills it in from the last clip before rendering.
 
 ## Quickstart
 
