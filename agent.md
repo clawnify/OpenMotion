@@ -19,6 +19,22 @@ The deploy page asks two questions. Use them for the user's first composition:
 
 If an answer is missing, keep the starter composition as it is.
 
+## Requests from the app's chat
+
+The app opens the chat with a draft the user sends:
+
+- From the video list: `Make a new video in OpenMotion: <brief>`. Create the
+  composition, render it if the user asked for a finished video, then open it
+  for them at the app path `/<composition id>`.
+- From the editor: `In the OpenMotion video "<name>": …`, sometimes naming a
+  clip and its start time. The chat context carries the open video as a record
+  of type `composition` with its `id`. Change that composition with
+  `PUT /api/compositions/{id}`; do not create a new one.
+
+The editor reloads the preview after your write and keeps the playhead where
+it was. When the user has unsaved edits it asks them before taking your
+version, so a write never silently replaces their work.
+
 ## Composition format (HyperFrames)
 
 A composition is one HTML fragment with a root element carrying

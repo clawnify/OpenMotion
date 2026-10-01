@@ -343,19 +343,25 @@ function previewDoc(html: string): string {
         // shouldn't jump the time. (Reload restores time via a 'seek' message.)
       }
     });
-    addEventListener('load', function () {
+    // Scale the stage now, not on load: load waits for every image and video,
+    // and until the fit the composition paints at full size, cropped. The head
+    // style keeps it hidden until this runs; removing it (rather than writing
+    // an inline opacity) leaves the composition's own styles untouched.
+    (function () {
       var root = document.querySelector('[data-composition-id]');
-      if (root) {
-        var w = +(root.dataset.width || 1920), h = +(root.dataset.height || 1080);
-        root.style.width = w + 'px'; root.style.height = h + 'px';
-        root.style.position = 'relative'; root.style.transformOrigin = 'top left';
-        var fit = function () {
-          var s = Math.min(innerWidth / w, innerHeight / h);
-          var tx = (innerWidth - w * s) / 2, ty = (innerHeight - h * s) / 2;
-          root.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + s + ')';
-        };
-        fit(); addEventListener('resize', fit);
-      }
+      if (!root) return;
+      var w = +(root.dataset.width || 1920), h = +(root.dataset.height || 1080);
+      root.style.width = w + 'px'; root.style.height = h + 'px';
+      root.style.position = 'relative'; root.style.transformOrigin = 'top left';
+      var fit = function () {
+        var s = Math.min(innerWidth / w, innerHeight / h);
+        var tx = (innerWidth - w * s) / 2, ty = (innerHeight - h * s) / 2;
+        root.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + s + ')';
+      };
+      fit(); addEventListener('resize', fit);
+      var hold = document.getElementById('om-unfitted'); if (hold) hold.remove();
+    })();
+    addEventListener('load', function () {
       tls = Object.values(window.__timelines || {});
       tls.forEach(function (tl) { try { tl.pause(0); } catch (e) {} });
       var tlMax = tls.reduce(function (a, tl) { try { return Math.max(a, tl.duration()); } catch (e) { return a; } }, 0);
@@ -388,6 +394,7 @@ function previewDoc(html: string): string {
   const rewritten = html.replace(/(["'(])assets\//g, "$1/api/uploads/");
   return `<!doctype html><html><head><meta charset="utf-8" />
 <style>html,body{margin:0;padding:0;background:#000;overflow:hidden}</style>
+<style id="om-unfitted">body > [data-composition-id]{opacity:0}</style>
 </head><body>
 ${rewritten}
 <script>${harness}</script>
