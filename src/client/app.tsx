@@ -10,6 +10,7 @@ import {
 import { SHAPES, starterHtml } from "./starter";
 import { Timeline, type TimelineEdit } from "./timeline";
 import { compositionLength } from "../shared/length";
+import { shiftTweenPositions } from "../shared/tween-shift";
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import {
   ArrowLeft,
@@ -1036,9 +1037,21 @@ function applyClipPatch(html: string, index: number, patch: ClipPatch): string {
     if (patch.color !== undefined) el.style.color = patch.color;
     if (patch.fontSize !== undefined) el.style.fontSize = patch.fontSize;
     if (patch.src !== undefined) el.setAttribute("src", patch.src);
+    const oldStart = parseFloat(el.getAttribute("data-start") || "0") || 0;
     if (patch.start !== undefined) el.setAttribute("data-start", String(patch.start));
     if (patch.duration !== undefined) el.setAttribute("data-duration", String(patch.duration));
     if (patch.track !== undefined) el.setAttribute("data-track-index", String(patch.track));
+    // A clip's entrance tween is positioned at an absolute composition time
+    // equal to its start. When the start moves (a drag-move or a left-trim, or
+    // an inspector start edit) the tween has to move with it, or the clip pops
+    // in with its animation already over. Right-trim (duration only) leaves the
+    // start alone and needs no shift. Only this clip's own id is touched.
+    if (patch.start !== undefined && el.id) {
+      const script = doc.querySelector("script:not([src])");
+      if (script && script.textContent) {
+        script.textContent = shiftTweenPositions(script.textContent, el.id, patch.start - oldStart);
+      }
+    }
     // A stated length is where the render stops. Moving a clip's end past it
     // would cut the clip off in the MP4 while the timeline still shows it, so
     // the length follows the clip out. It never shrinks on its own: a hold
