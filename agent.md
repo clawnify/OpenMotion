@@ -79,6 +79,26 @@ yPercent: -50 })`, as above. Animate transforms and opacity only: tweening
 layout properties such as `letterSpacing`, `width` or `top` snaps to whole
 pixels and stutters in the render.
 
+### Motion: vary it, don't animate everything the same way
+
+Mechanical motion is the tell of a generated video: the same ease, the same
+duration, the same "fade up 30px" on every element. Vary all three.
+
+- **Start at 0.1-0.3s, never t=0.** A zero-delay first entrance reads as a jump
+  cut. Offset it.
+- **Vary the ease.** Don't put `power2.out` on everything. `expo.out` is a
+  confident entrance, `sine.inOut` a soft one, `back.out` a playful one. No more
+  than two tweens should share one ease. Entrances use an `.out` ease (fast,
+  then settling); the occasional exit uses `.in`.
+- **Vary the duration.** The slowest move should be roughly 3x the fastest. Fast
+  (0.15-0.3s) reads as energy, slow (0.5-0.8s) as weight. Not 0.5s on everything.
+- **Vary the entrance direction.** Not `y: 50, opacity: 0` on every element:
+  come from the left, from the right, from `scale`, or from opacity alone.
+- **Stagger by importance, not DOM order.** Whatever moves first reads as the
+  most important. Overlap the entries and keep the whole stagger under ~0.5s.
+- **Then let it hold.** Once everything is in, stop. Stillness after motion is
+  what makes the motion land; don't keep animating for its own sake.
+
 ### Length: always set the root's `data-duration`
 
 The root's `data-duration` is where the render stops. Set it to when the last
