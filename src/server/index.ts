@@ -10,6 +10,7 @@ import {
 } from "./uploads";
 import { renderComposition } from "./render";
 import { compositionLength, withLength } from "../shared/length";
+import { lintComposition } from "./lint";
 
 type Bindings = {
   DB: D1Database;
@@ -50,10 +51,17 @@ app.get("/api/compositions", async (c) => {
   return c.json(rows);
 });
 
+// One composition, with what HyperFrames' linter says about it (see lint.ts).
+// The writes answer the same way, so whoever wrote it, the agent or the
+// editor, learns in the same response what will render wrong.
+async function withLint(row: Composition) {
+  return { ...row, lint: await lintComposition(row.html) };
+}
+
 app.get("/api/compositions/:id", async (c) => {
   const row = await get<Composition>("SELECT * FROM compositions WHERE id = ?", [c.req.param("id")]);
   if (!row) return c.json({ error: "Not found" }, 404);
-  return c.json(row);
+  return c.json(await withLint(row));
 });
 
 app.post("/api/compositions", async (c) => {
@@ -65,7 +73,7 @@ app.post("/api/compositions", async (c) => {
     [id, b.name.trim(), b.description ?? "", b.html ?? "", b.fps ?? 30],
   );
   const row = await get<Composition>("SELECT * FROM compositions WHERE id = ?", [id]);
-  return c.json(row, 201);
+  return c.json(row && (await withLint(row)), 201);
 });
 
 app.put("/api/compositions/:id", async (c) => {
@@ -78,7 +86,7 @@ app.put("/api/compositions/:id", async (c) => {
     [b.name ?? existing.name, b.description ?? existing.description, b.html ?? existing.html, b.fps ?? existing.fps, id],
   );
   const row = await get<Composition>("SELECT * FROM compositions WHERE id = ?", [id]);
-  return c.json(row);
+  return c.json(row && (await withLint(row)));
 });
 
 app.delete("/api/compositions/:id", async (c) => {

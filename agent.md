@@ -125,9 +125,9 @@ also upload programmatically with a multipart `POST /api/assets`.)
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET  | `/api/compositions` | List compositions |
-| GET  | `/api/compositions/{id}` | Get one (includes `html`) |
-| POST | `/api/compositions` | Create `{ name, description?, html?, fps? }` |
-| PUT  | `/api/compositions/{id}` | Update any of `name/description/html/fps` |
+| GET  | `/api/compositions/{id}` | Get one (includes `html` and `lint`) |
+| POST | `/api/compositions` | Create `{ name, description?, html?, fps? }` → the row with `lint` |
+| PUT  | `/api/compositions/{id}` | Update any of `name/description/html/fps` → the row with `lint` |
 | DELETE | `/api/compositions/{id}` | Delete |
 | GET  | `/api/assets` | List uploaded media |
 | POST | `/api/renders` | Export an MP4 `{ composition_id }` (only when a file is asked for) → returns the job |
@@ -140,8 +140,32 @@ also upload programmatically with a multipart `POST /api/assets`.)
 2. `GET /api/assets` to see the user's logo / demo clips and their `key`s.
 3. Write the composition HTML, referencing media as `assets/<key>`, and
    `POST /api/compositions` (or `PUT` to revise an existing one).
-4. Stop there. The preview in the editor is the video, frame for frame, so
+4. Read `lint` in the response (see Lint). If `errors` is above 0, fix each
+   finding and `PUT` again before you report back.
+5. Stop there. The preview in the editor is the video, frame for frame, so
    there is nothing to render to show the user a result.
+
+## Lint
+
+Every create, update and single read answers with `lint`: HyperFrames' own
+linter run on the composition as the renderer will load it.
+
+```json
+"lint": { "errors": 1, "warnings": 0, "findings": [
+  { "severity": "error", "code": "gsap_css_transform_conflict",
+    "message": "...", "fix": "...", "line": 14 } ] }
+```
+
+These are mistakes that render without failing and look wrong in the MP4: a CSS
+`transform` a GSAP tween throws away (the title is no longer centred), a
+timeline never registered on `window.__timelines` (nothing moves), a tween on a
+non-transform property, `Math.random()`. `fix` says what to change and `line`
+is the line in the HTML you sent. `findings` lists at most 10, errors first;
+the counts cover all of them. `lint` is `null` when the HTML is empty.
+
+Fix every error before you report back. Warnings are worth fixing when the fix
+is small. The editor shows the same list to the user as an "issues" badge, with
+an "Ask AI to fix" button that sends you the findings.
 
 ## Exporting (only when a file is asked for)
 

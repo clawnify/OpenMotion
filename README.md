@@ -14,6 +14,7 @@ Agents are already good at writing motion graphics as code. Where it gets hard i
 
 - **Describe a video**: inside Clawnify, write what you want (what it is for, how long, vertical or landscape) and your AI agent builds it. **Ask AI** in the editor changes the video on screen, and the preview updates in place.
 - **Timeline editor**: drag a clip to move it or onto another track, drag its edges to trim it, zoom in to the frame, and undo anything (Cmd/Ctrl-Z). Clips snap to the playhead and to each other, and every change is written back to the composition's timing attributes.
+- **Catches what would render wrong**: every save runs HyperFrames' own linter, so a title a GSAP tween knocks off centre or a timeline that never plays shows up as an issue with its fix before you export, and **Ask AI to fix** hands the list to your agent.
 - **Live preview**: one clock keeps the preview and the timeline in sync.
 - **Bring your own media**: upload logos and product clips and reference them by path (`assets/your-logo.png`) in the HTML.
 - **Export when you need a file**: the preview is the video, so nothing renders until you export. Export makes a real MP4, downloads it and keeps it in your media library.
@@ -67,7 +68,7 @@ src/
   client/ui.tsx      # shared control recipes (buttons, dialog, empty state)
   client/starter.ts  # the starter composition (video content, not app chrome)
   client/styles.css  # design tokens: palette, type scale, elevation
-  server/            # Hono API: compositions, assets, renders
+  server/            # Hono API: compositions (linted), assets, renders
 agent.md             # how an AI agent authors and renders videos
 ```
 
