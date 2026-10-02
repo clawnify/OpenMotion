@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   openChat,
   reportLocation,
@@ -154,6 +155,10 @@ export function App() {
         </span>
         <span className="text-heading-3">OpenMotion</span>
         <span className="text-fine text-faint hidden sm:inline">motion graphics as code</span>
+        {/* The editor portals its actions (issues, Ask AI, export) in here, so
+            they ride the top bar while their state stays in the editor. Empty
+            on the gallery. */}
+        <div id="ove-topbar-actions" className="ml-auto flex items-center gap-2" />
       </header>
 
       {id ? (
@@ -492,6 +497,14 @@ function Editor({
     if (seq === lintSeq.current) setLint(row.lint ?? null);
   }
 
+  // The top bar's action slot lives in the app header (outside this component);
+  // the editor renders its actions into it through a portal. Resolved after the
+  // DOM is committed, before paint, so the buttons don't flash in a frame late.
+  const [topbarSlot, setTopbarSlot] = useState<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    setTopbarSlot(document.getElementById("ove-topbar-actions"));
+  }, []);
+
   // Selected clip (by index) for the right-side inspector.
   const [selectedClip, setSelectedClip] = useState<number | null>(null);
 
@@ -744,6 +757,20 @@ function Editor({
           onClose={() => setConfirmDelete(false)}
         />
       )}
+      {/* Editor actions ride the app's top bar (rendered in the header above). */}
+      {topbarSlot &&
+        createPortal(
+          <>
+            <LintMenu lint={lint} onFix={hasChat ? fixWithAI : undefined} />
+            {hasChat && (
+              <button onClick={askAI} className={btnSecondary}>
+                <Sparkles className="w-4 h-4" /> Ask AI
+              </button>
+            )}
+            <ExportMenu comp={{ ...comp, name }} changes={changes} />
+          </>,
+          topbarSlot,
+        )}
       <Group
         orientation="vertical"
         defaultLayout={vLayout.defaultLayout}
@@ -809,7 +836,7 @@ function Editor({
               </button>
             </div>
           )}
-          <div className="px-5 pt-3 shrink-0 flex items-center justify-between gap-3">
+          <div className="px-5 pt-3 shrink-0 flex items-center gap-3">
             <div className="inline-flex items-center gap-0.5 rounded-full bg-surface-sunken p-0.5">
               {(["timeline", "compose", "media"] as Tab[]).map((t) => (
                 <button
@@ -823,15 +850,6 @@ function Editor({
                   {t}
                 </button>
               ))}
-            </div>
-            <div className="flex items-center gap-2">
-              <LintMenu lint={lint} onFix={hasChat ? fixWithAI : undefined} />
-              {hasChat && (
-                <button onClick={askAI} className={btnSecondary}>
-                  <Sparkles className="w-4 h-4" /> Ask AI
-                </button>
-              )}
-              <ExportMenu comp={{ ...comp, name }} changes={changes} />
             </div>
           </div>
 
