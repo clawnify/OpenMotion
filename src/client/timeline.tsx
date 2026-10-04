@@ -67,7 +67,8 @@ export function Timeline({
   playing: boolean;
   fps: number;
   selected: string | null;
-  onSelect: (id: string) => void;
+  /** A clip was pressed, or null: the empty timeline was, which lets go of the selection. */
+  onSelect: (id: string | null) => void;
   onSeek: (t: number) => void;
   onTogglePlay: () => void;
   onChange: (id: string, edit: TimelineEdit, phase: "live" | "commit") => void;
@@ -234,10 +235,22 @@ export function Timeline({
           {/* lanes */}
           {rows.map((lane) => (
             <div key={lane} className="flex" style={{ height: ROW_H }}>
-              <div style={{ width: HEAD_W }} className="shrink-0 sticky left-0 z-10 bg-surface border-r border-b border-border flex items-center px-3 text-fine text-muted">
+              <div
+                style={{ width: HEAD_W }}
+                className="shrink-0 sticky left-0 z-10 bg-surface border-r border-b border-border flex items-center px-3 text-fine text-muted"
+                onPointerDown={() => onSelect(null)}
+              >
                 {lane < lanes ? `Track ${lane + 1}` : <span className={dragging ? "" : "text-faint"}>New track</span>}
               </div>
-              <div className="relative flex-1 border-b border-border bg-background" onPointerDown={scrub}>
+              {/* A press on the empty lane lets go of the selection and moves the
+                  playhead there. Clips stop their own presses (grab). */}
+              <div
+                className="relative flex-1 border-b border-border bg-background"
+                onPointerDown={(e) => {
+                  onSelect(null);
+                  scrub(e);
+                }}
+              >
                 {items
                   .filter((it) => it.lane === lane)
                   .map((it) => (

@@ -604,22 +604,10 @@ function Editor({
   // Selected clip (by index) for the right-side inspector.
   const [selectedClip, setSelectedClip] = useState<number | null>(null);
 
-  // Open with the headline already selected, so the first thing on screen is a
-  // field holding the text you are about to change. An editor that opens on
-  // "select something to edit it" spends the user's first move on housekeeping;
-  // the measurable thing in a first run is time to first EDIT.
-  const autoSelected = useRef(false);
-  useEffect(() => {
-    if (autoSelected.current) return;
-    const { clips } = parseClips(comp.html);
-    if (!clips.length) return;
-    autoSelected.current = true;
-    const px = (v: string) => parseFloat(v) || 0;
-    const headline = clips
-      .filter((c) => c.type === "text")
-      .sort((a, b) => px(b.fontSize) - px(a.fontSize))[0];
-    setSelectedClip((headline ?? clips[0]).index);
-  }, [comp.html]);
+  // A video opens with nothing selected. Selecting a clip also loops the
+  // preview over that clip's span, so an editor that pre-selected one (it used
+  // to pick the biggest title, or the first clip when there was none) opened
+  // on a video that played only its first few seconds.
 
   // Playhead state, kept in sync with the preview iframe's master clock.
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -1072,7 +1060,7 @@ function Editor({
             playing={playing}
             fps={fps}
             selected={selectedClip == null ? null : String(selectedClip)}
-            onSelect={(id) => setSelectedClip(Number(id))}
+            onSelect={(id) => setSelectedClip(id == null ? null : Number(id))}
             onSeek={seek}
             onTogglePlay={togglePlay}
             onChange={onTimelineChange}
