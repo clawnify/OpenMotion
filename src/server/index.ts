@@ -94,11 +94,15 @@ const screenDemoSchema = z.object({
     seconds: z.number(),
     focus: boxSchema.optional(),
     click: boxSchema.optional(),
+    drag: z.object({ from: boxSchema, to: boxSchema }).optional(),
+    connect: z.object({ from: boxSchema, to: boxSchema }).optional(),
+    type: z.object({ box: boxSchema, frames: z.array(z.string().min(1)).min(1).max(30) }).optional(),
   })).min(1).max(40),
   page: sizeSchema.optional(),
   frame: sizeSchema.optional(),
   background: z.string().max(300).optional(),
   accent: z.string().optional(),
+  tilt: z.boolean().optional(),
 });
 
 app.post("/api/compositions/screen-demo", async (c) => {
@@ -114,17 +118,26 @@ app.post("/api/compositions/screen-demo", async (c) => {
   if (!existing && !b.name) return c.json({ error: "name is required" }, 400);
 
   const keys = new Set((await query<{ key: string }>("SELECT key FROM assets")).map((a) => a.key));
-  const missing = b.steps.map((s) => s.asset).filter((k) => !keys.has(k));
+  const missing = b.steps.flatMap((s) => [s.asset, ...(s.type?.frames ?? [])]).filter((k) => !keys.has(k));
   if (missing.length) return c.json({ error: "unknown asset", problems: missing.map((k) => `no asset with key ${k}`) }, 400);
 
   const id = existing?.id ?? crypto.randomUUID();
   const opts = {
     id: `demo-${id.slice(0, 8)}`,
-    steps: b.steps.map((s) => ({ src: `assets/${s.asset}`, seconds: s.seconds, focus: s.focus, click: s.click })),
+    steps: b.steps.map((s) => ({
+      src: `assets/${s.asset}`,
+      seconds: s.seconds,
+      focus: s.focus,
+      click: s.click,
+      drag: s.drag,
+      connect: s.connect,
+      type: s.type && { box: s.type.box, frames: s.type.frames.map((k) => `assets/${k}`) },
+    })),
     page: b.page,
     frame: b.frame,
     background: b.background,
     accent: b.accent,
+    tilt: b.tilt,
   };
   const problems = screenDemoProblems(opts);
   if (problems.length) return c.json({ error: "invalid screen demo", problems }, 400);

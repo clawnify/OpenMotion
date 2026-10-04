@@ -1,7 +1,7 @@
 // Run: pnpm test (Node 22+, no dependencies).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { screenDemoHtml, screenDemoProblems, type ScreenDemoOptions } from "../src/shared/screen-demo.ts";
+import { screenDemoHtml, screenDemoProblems, typingWindow, type ScreenDemoOptions } from "../src/shared/screen-demo.ts";
 import { compositionLength } from "../src/shared/length.ts";
 
 const demo: ScreenDemoOptions = {
@@ -55,7 +55,7 @@ test("a click step too short for the kit, a box off the page and a bad src are n
     ],
   });
   assert.deepEqual(problems, [
-    "steps[0].seconds: at least 2 for a step with a click",
+    "steps[0].seconds: at least 2 for a step with click",
     "steps[1].focus: a box {x,y,w,h} on the 1600x900 page",
     "steps[2].src: an assets/<key> path",
   ]);
@@ -72,4 +72,59 @@ test("a bad id, no steps and a bad accent are named", () => {
 test("the background cannot close the style attribute", () => {
   const html = screenDemoHtml({ ...demo, background: '#fff" onload="x' });
   assert.match(html, /background:#fff&quot; onload=&quot;x"/);
+});
+
+test("drag and connect write both boxes; type writes its box and one clip per typed still", () => {
+  const html = screenDemoHtml({
+    id: "flow",
+    steps: [
+      { src: "assets/1.png", seconds: 3, drag: { from: { x: 287, y: 127, w: 235, h: 55 }, to: { x: 699, y: 559, w: 2, h: 2 } } },
+      { src: "assets/2.png", seconds: 4.5, type: { box: { x: 706, y: 600, w: 212, h: 64 }, frames: ["assets/t1.png", "assets/t2.png", "assets/t3.png"] } },
+      { src: "assets/3.png", seconds: 3, connect: { from: { x: 981, y: 611, w: 10, h: 10 }, to: { x: 991, y: 388, w: 10, h: 10 } } },
+      { src: "assets/4.png", seconds: 2 },
+    ],
+  });
+  assert.match(html, /id="step1"[^>]*data-drag-from="287,127,235,55" data-drag-to="699,559,2,2"/);
+  assert.match(html, /id="step3"[^>]*data-connect-from="981,611,10,10" data-connect-to="991,388,10,10"/);
+  assert.match(html, /id="step2"[^>]*data-type="706,600,212,64"/);
+  // Typed stills share the typing window in order; the last holds to the step's end.
+  const typed = [...html.matchAll(/id="step2-typed(\d)" src="([^"]+)" class="clip demo-typed" data-start="([\d.]+)" data-duration="([\d.]+)"/g)]
+    .map((m) => [m[2], Number(m[3]), Number(m[4])]);
+  const [from, to] = typingWindow(3, 4.5);
+  const slice = (to - from) / 3;
+  assert.deepEqual(typed.map((x) => x[0]), ["assets/t1.png", "assets/t2.png", "assets/t3.png"]);
+  assert.ok(Math.abs((typed[0][1] as number) - from) < 1e-3);
+  assert.ok(Math.abs((typed[1][1] as number) - (from + slice)) < 1e-3);
+  assert.ok(Math.abs((typed[2][1] as number) + (typed[2][2] as number) - 7.5) < 1e-3);
+  assert.equal(compositionLength(html), 12.5);
+});
+
+test("one action per step, each with its own minimum length, and typing needs stills", () => {
+  const b = { x: 10, y: 10, w: 20, h: 20 };
+  assert.deepEqual(
+    screenDemoProblems({
+      id: "x",
+      steps: [
+        { src: "assets/a.png", seconds: 3, click: b, drag: { from: b, to: b } },
+        { src: "assets/b.png", seconds: 2, type: { box: b, frames: [] } },
+        { src: "assets/c.png", seconds: 2, connect: { from: b, to: { x: 5000, y: 0, w: 2, h: 2 } } },
+      ],
+    }),
+    [
+      "steps[0]: one of click, drag, connect, type per step, not click and drag",
+      "steps[1].seconds: at least 2.5 for a step with type",
+      "steps[1].type.frames: at least one",
+      "steps[2].seconds: at least 2.2 for a step with connect",
+      "steps[2].connect.to: a box {x,y,w,h} on the 1600x900 page",
+    ],
+  );
+});
+
+test("the cursor's randomness is seeded: no Math.random in the composition", () => {
+  assert.doesNotMatch(screenDemoHtml(demo), /Math\.random/);
+});
+
+test("the 3D open and close is off unless asked for", () => {
+  assert.doesNotMatch(screenDemoHtml(demo), /data-tilt="1"/);
+  assert.match(screenDemoHtml({ ...demo, tilt: true }), /data-accent="224,82,104" data-tilt="1"/);
 });

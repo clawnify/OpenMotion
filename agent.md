@@ -130,35 +130,50 @@ toward the composition's length.
 ## Product demos of a web app (screen-recording style)
 
 When the user asks for a demo, walkthrough or "screen recording" of a web app
-at a link, the video shows that app being used: a cursor glides to a control,
-clicks it, the page changes, and the camera zooms to what matters.
+at a link, the video shows that app being used: a cursor moves like a hand to
+a control and clicks it, drags an item onto a canvas, draws a connection or
+types, the page changes, and the camera zooms to what matters.
 
 Build it from **stills of the real app, one per state, captured in a real
 browser**, never from an `<iframe>` of the link. The renderer cannot click
 inside an iframe or rewind it, and most apps refuse to be framed at all
-(`frame-ancestors`). A still per state, with the cursor, click and camera
-animated on top by the app, renders the same every time and works for any
-page you can open.
+(`frame-ancestors`). A still per state, with the cursor and camera animated on
+top by the app, renders the same every time and works for any page you can
+open. Typing is real too: stills taken while the text went in.
 
 **Plan 3 to 6 steps.** For each: the state the page is in, what to point the
-viewer at (`focus`), and what gets clicked to reach the next state (`click`).
-The last step has no click. Give a step with a click about 3.5 s (at least
-2 s), the last one 2 to 3 s.
+viewer at (`focus`), and the one action that reaches the next state:
+
+| Action | What the video shows | Step length |
+|---|---|---|
+| `click` | cursor travels, presses, ripple, the page changes | 3.5 s (at least 2) |
+| `drag` | the item is picked up and its ghost follows the cursor to the drop | 3.4 s (at least 2.2) |
+| `connect` | a line grows from one handle to the cursor and lands on the other | 3.4 s (at least 2.2) |
+| `type` | camera on the field, cursor clicks in, the text goes in | 4.5 s (at least 2.5) |
+
+The last step usually has no action: 2 to 3 s to look at the result.
 
 **If you can run Node and Chrome, use the capture script** in this repo. Write
 a spec that names elements by what they say, so it still works after the app's
 layout changes:
 
 ```json
-{ "name": "Studio: from prompt to outputs",
+{ "name": "Studio: add a prompt and connect it",
   "url": "https://app.clawnify.com/demo/workspaces/studio?at=%2Fworkflows%2F5a1e0000-0000-4000-8000-000000000001",
   "wait_gone": "Loading",
   "steps": [
-    { "focus": { "text": "A tidy creative studio desk", "closest": ".react-flow__node" },
-      "click": { "text": "Outputs" }, "seconds": 4 },
-    { "focus": { "text": "sample-output", "closest": "div:has(img)" },
-      "click": { "text": "Workflows" }, "seconds": 3.5 },
-    { "seconds": 2.5 } ] }
+    { "drag": { "from": { "text": "Prompt", "selector": "[draggable=true]" },
+                "to": { "x": 700, "y": 560 } }, "seconds": 3.4 },
+    { "type": { "into": { "selector": "[contenteditable=true]",
+                          "within": { "text": "PROMPT 2", "closest": ".react-flow__node" } },
+                "text": "A neon city skyline at dusk, retro poster style", "frames": 12 },
+      "seconds": 4.6 },
+    { "connect": { "from": { "selector": ".react-flow__handle.source",
+                             "within": { "text": "PROMPT 2", "closest": ".react-flow__node" } },
+                   "to": { "selector": ".react-flow__handle.target",
+                           "within": { "text": "GENERATE IMAGE", "closest": ".react-flow__node" } } },
+      "seconds": 3.4 },
+    { "seconds": 3 } ] }
 ```
 
 ```sh
@@ -167,18 +182,24 @@ CHROME_PATH=/path/to/chrome pnpm demo:capture spec.json \
 ```
 
 A locator is `text` (the smallest visible element containing it, in any frame;
-for a click, controls win), `selector`, or both, plus `closest` to grow the
-match to an ancestor such as its card. The script screenshots each state at
-1600×900, scale 2, really clicks, uploads the stills and calls the endpoint
-below. With `--composition` it rebuilds that video in place: run the same
-spec again whenever the app changes.
+for a click or a drag, controls win), `selector`, or both, plus `closest` to
+grow the match to an ancestor such as its card and `within` to search only
+inside another locator's match (one node's handle). A drop target can be a
+page point `{ "x", "y" }`. The script screenshots each state at 1600×900,
+scale 2, really performs the action (a press-move-release for `drag` and
+`connect`, real keys for `type`, with a still after each chunk of text),
+uploads the stills and calls the endpoint below. With `--composition` it
+rebuilds that video in place: run the same spec again whenever the app
+changes. It warns when a click target matches several controls: add a
+selector.
 
 **Otherwise capture by hand** in your own browser: viewport 1600×900 at device
 scale factor 2; per step, wait until the page settles, take a viewport
-screenshot, record `focus` and `click` as `{x,y,w,h}` page pixels
+screenshot, record boxes as `{x,y,w,h}` page pixels
 (`getBoundingClientRect()`; inside an iframe, add the iframe's own `x`/`y`),
-then really click. Upload each still with a multipart `POST /api/assets`
-(field `file`) and keep the `key` it returns.
+then really perform the action (for `type`, a screenshot after each few
+characters). Upload each still with a multipart `POST /api/assets` (field
+`file`) and keep the `key` it returns.
 
 **Then build the video** with `POST /api/compositions/screen-demo`:
 
@@ -194,15 +215,20 @@ then really click. Upload each still with a multipart `POST /api/assets`
     { "asset": "studio-3.png", "seconds": 2.5 } ] }
 ```
 
+A step's action is one of `click: box`, `drag: { from: box, to: box }`,
+`connect: { from: box, to: box }` or `type: { box, frames: [asset keys] }`.
+
 Optional: `composition_id` (rebuild that video instead of creating one),
 `page` (the capture viewport, default 1600×900), `frame` (the video size,
 default 1920×1080; a smaller frame scales the window down), `background` (CSS
-behind the window), `accent` (the click ripple as `r,g,b`, use the brand's).
+behind the window), `accent` (the click ripple and connection line as `r,g,b`,
+use the brand's), `tilt: true` (open with the window tilting in from 3D and
+close with it tilting away; off unless the user wants it).
 It answers like a create, with `lint`; a bad step answers 400 with `problems`.
 
 The result is an ordinary composition: one `<img class="clip demo-step">` per
-step, and a script that turns each step's `data-start`, `data-focus` and
-`data-click` into the camera, cursor and click. So moving or trimming a step on
+step (plus one per typed still), and a script that turns each step's
+`data-start`, focus and action boxes into the camera, cursor and action. So moving or trimming a step on
 the timeline moves its motion with it. Leave that script as it is; change the
 look around it.
 
