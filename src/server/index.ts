@@ -103,6 +103,7 @@ const screenDemoSchema = z.object({
   background: z.string().max(300).optional(),
   accent: z.string().optional(),
   tilt: z.boolean().optional(),
+  floating: z.boolean().optional(),
 });
 
 app.post("/api/compositions/screen-demo", async (c) => {
@@ -138,6 +139,7 @@ app.post("/api/compositions/screen-demo", async (c) => {
     background: b.background,
     accent: b.accent,
     tilt: b.tilt,
+    floating: b.floating,
   };
   const problems = screenDemoProblems(opts);
   if (problems.length) return c.json({ error: "invalid screen demo", problems }, 400);

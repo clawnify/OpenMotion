@@ -220,10 +220,12 @@ A step's action is one of `click: box`, `drag: { from: box, to: box }`,
 
 Optional: `composition_id` (rebuild that video instead of creating one),
 `page` (the capture viewport, default 1600×900), `frame` (the video size,
-default 1920×1080; a smaller frame scales the window down), `background` (CSS
-behind the window), `accent` (the click ripple and connection line as `r,g,b`,
-use the brand's), `tilt: true` (open with the window tilting in from 3D and
-close with it tilting away; off unless the user wants it).
+default 1920×1080), `accent` (the click ripple and connection line as `r,g,b`,
+use the brand's). By default the app fills the video edge to edge, with
+nothing around it. Two looks are off unless the user asks for them:
+`floating: true` shows the app as a floating window (rounded corners, a
+shadow, `background` around it), and `tilt: true` opens with the app tilting
+in from 3D and closes with it tilting away.
 It answers like a create, with `lint`; a bad step answers 400 with `problems`.
 
 The result is an ordinary composition: one `<img class="clip demo-step">` per

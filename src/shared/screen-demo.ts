@@ -54,11 +54,16 @@ export interface ScreenDemoOptions {
   page?: { width: number; height: number };
   /** The video's size. */
   frame?: { width: number; height: number };
-  /** CSS background behind the window. */
+  /**
+   * Show the app as a floating window (rounded corners, a shadow, a margin of
+   * background around it). Off by default: the app fills the video edge to edge.
+   */
+  floating?: boolean;
+  /** CSS background around the app: behind the floating window, or in a letterbox. */
   background?: string;
   /** The click ripple and connection colour, as `r,g,b`. */
   accent?: string;
-  /** Open with the window tilting in from 3D, and close with it tilting away. */
+  /** Open with the app tilting in from 3D, and close with it tilting away. */
   tilt?: boolean;
 }
 
@@ -116,13 +121,19 @@ export function typingWindow(start: number, seconds: number): [number, number] {
 export function screenDemoHtml(opts: ScreenDemoOptions): string {
   const { width: pw, height: ph } = opts.page ?? { width: 1600, height: 900 };
   const { width: fw, height: fh } = opts.frame ?? { width: 1920, height: 1080 };
-  // The window is the page at 1:1, centred, scaled down only if the frame is
-  // smaller than the page plus a margin.
-  const fitScale = Math.min(1, (fw * 0.9) / pw, (fh * 0.9) / ph);
+  // By default the page fills the video (letterboxed if the shapes differ;
+  // the stills are 2x, so scaling up stays sharp). Floating, it sits at 1:1
+  // with a margin, scaled down only if the frame is too small for that.
+  const fitScale = opts.floating
+    ? Math.min(1, (fw * 0.9) / pw, (fh * 0.9) / ph)
+    : Math.min(fw / pw, fh / ph);
   const ww = Math.round(pw * fitScale), wh = Math.round(ph * fitScale);
   const wx = Math.round((fw - ww) / 2), wy = Math.round((fh - wh) / 2);
   const accent = opts.accent ?? "224,82,104";
-  const bg = opts.background ?? "linear-gradient(135deg,#f6d5dc,#dfe3f7)";
+  const bg = opts.background ?? (opts.floating ? "linear-gradient(135deg,#f6d5dc,#dfe3f7)" : "#000");
+  const windowLook = opts.floating
+    ? "border-radius:14px;box-shadow:0 30px 80px rgba(20,20,60,.25),0 0 0 1px rgba(0,0,0,.06);"
+    : "";
   const fill = `position:absolute;left:0;top:0;width:${pw}px;height:${ph}px`;
 
   let t = 0;
@@ -161,7 +172,7 @@ export function screenDemoHtml(opts: ScreenDemoOptions): string {
   return `<div id="root" data-composition-id="${opts.id}" data-start="0" data-duration="${round(t)}" data-width="${fw}" data-height="${fh}"
      style="width:${fw}px;height:${fh}px;position:relative;overflow:hidden;background:${esc(bg)}">
   <div id="cam" style="position:absolute;left:0;top:0;width:${fw}px;height:${fh}px;transform-origin:0 0">
-    <div id="frame" style="position:absolute;left:${wx}px;top:${wy}px;width:${ww}px;height:${wh}px;border-radius:14px;overflow:hidden;background:#fff;box-shadow:0 30px 80px rgba(20,20,60,.25),0 0 0 1px rgba(0,0,0,.06)">
+    <div id="frame" style="position:absolute;left:${wx}px;top:${wy}px;width:${ww}px;height:${wh}px;overflow:hidden;background:#fff;${windowLook}">
     <div id="win" data-page-width="${pw}" data-page-height="${ph}" data-page-scale="${round(fitScale)}" data-accent="${accent}"${opts.tilt ? ` data-tilt="1"` : ""}
          style="position:absolute;left:0;top:0;width:${pw}px;height:${ph}px;transform-origin:0 0;transform:scale(${round(fitScale)})">
 ${imgs.join("\n")}
