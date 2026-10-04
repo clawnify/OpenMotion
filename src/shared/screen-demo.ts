@@ -221,35 +221,9 @@ export function screenDemoHtml(opts: ScreenDemoOptions): string {
   const steps = stepsHtml(opts.steps, { width: pw, height: ph });
   let t = steps.end;
 
-  // The layout: the area the demo fills (the kit fits it to #cam's parent)
-  // and the clip that goes with it, video muted with its sound on <audio>.
   const layout = opts.layout ?? { kind: "full" as const };
-  let open = "", close = "", clip = "";
-  if (layout.kind !== "full") {
-    const length = Math.max(t, layout.seconds);
-    t = length;
-    const at = `data-start="0" data-duration="${round(layout.seconds)}"`;
-    const pos = `object-fit:cover;object-position:${layout.position ?? "50% 45%"}`;
-    let box: string;
-    if (layout.kind === "split") {
-      const half = Math.round(fh / 2);
-      const demoTop = layout.demo === "top" ? 0 : fh - half;
-      const clipTop = layout.demo === "top" ? half : 0;
-      open = `  <div id="demo-area" style="position:absolute;left:0;top:${demoTop}px;width:${fw}px;height:${half}px;overflow:hidden">\n`;
-      close = `  </div><!-- /demo-area -->\n`;
-      box = `left:0;top:${clipTop}px;width:${fw}px;height:${fh - half}px`;
-    } else {
-      const d = Math.round(Math.min(fw, fh) * 0.3), m = Math.round(Math.min(fw, fh) * 0.04);
-      const [v, h] = (layout.corner ?? "bottom-right").split("-");
-      box = `${h}:${m}px;${v}:${m}px;width:${d}px;height:${d}px;border-radius:50%;border:6px solid #fff;box-shadow:0 12px 40px rgba(0,0,0,.35);z-index:5`;
-    }
-    clip =
-      `  <!-- layout-clip -->\n` +
-      `  <video id="clip" src="${esc(layout.clip)}" class="clip" ${at} data-track-index="2" muted playsinline\n` +
-      `         style="position:absolute;${box};${pos}"></video>\n` +
-      `  <audio id="clip-audio" src="${esc(layout.clip)}" class="clip" ${at} data-track-index="3" data-volume="1"></audio>\n` +
-      `  <!-- /layout-clip -->\n`;
-  }
+  const { open, close, clip } = layoutParts(layout, { width: fw, height: fh });
+  if (layout.kind !== "full") t = Math.max(t, layout.seconds);
 
   return `<div id="root" data-composition-id="${opts.id}" data-start="0" data-duration="${round(t)}" data-width="${fw}" data-height="${fh}"
      style="width:${fw}px;height:${fh}px;position:relative;overflow:hidden;background:${esc(bg)}">
@@ -270,6 +244,36 @@ ${close}${clip}${opts.spec === undefined ? "" : `  <script type="application/jso
 ${KIT}
   </script>
 </div>`;
+}
+
+/**
+ * A layout's pieces: the area the demo fills (the kit fits the demo to #cam's
+ * parent) and the clip that goes with it, video muted with its sound on a
+ * separate <audio>. Split halves are percentages, so they follow a later
+ * change of format. Marked so applyLayout can find and replace them.
+ */
+export function layoutParts(layout: DemoLayout, frame: { width: number; height: number }): { open: string; close: string; clip: string } {
+  if (layout.kind === "full") return { open: "", close: "", clip: "" };
+  const at = `data-start="0" data-duration="${round(layout.seconds)}"`;
+  const pos = `object-fit:cover;object-position:${layout.position ?? "50% 45%"}`;
+  let open = "", close = "", box: string;
+  if (layout.kind === "split") {
+    const top = layout.demo === "top";
+    open = `  <div id="demo-area" style="position:absolute;left:0;top:${top ? "0" : "50%"};width:100%;height:50%;overflow:hidden">\n`;
+    close = `  </div><!-- /demo-area -->\n`;
+    box = `left:0;top:${top ? "50%" : "0"};width:100%;height:50%`;
+  } else {
+    const d = Math.round(Math.min(frame.width, frame.height) * 0.3), m = Math.round(Math.min(frame.width, frame.height) * 0.04);
+    const [v, h] = (layout.corner ?? "bottom-right").split("-");
+    box = `${h}:${m}px;${v}:${m}px;width:${d}px;height:${d}px;border-radius:50%;border:6px solid #fff;box-shadow:0 12px 40px rgba(0,0,0,.35);z-index:5`;
+  }
+  const clip =
+    `  <!-- layout-clip -->\n` +
+    `  <video id="clip" src="${esc(layout.clip)}" class="clip" ${at} data-track-index="2" muted playsinline\n` +
+    `         style="position:absolute;${box};${pos}"></video>\n` +
+    `  <audio id="clip-audio" src="${esc(layout.clip)}" class="clip" ${at} data-track-index="3" data-volume="1"></audio>\n` +
+    `  <!-- /layout-clip -->\n`;
+  return { open, close, clip };
 }
 
 const STEPS_OPEN = "      <!-- demo-steps -->";
@@ -345,11 +349,17 @@ export function demoStepTimes(html: string): { start: number; seconds: number }[
  * where the first one starts. The video grows if the steps now end later.
  * Null when the HTML holds no demo stills.
  */
-export function replaceDemoSteps(html: string, steps: ScreenDemoStep[], page: { width: number; height: number }): string | null {
+export function replaceDemoSteps(
+  html: string,
+  steps: ScreenDemoStep[],
+  page: { width: number; height: number },
+  opts: { reflow?: boolean } = {},
+): string | null {
   const span = stepsSpan(html);
   if (!span) return null;
   const times = demoStepTimes(html);
-  const same = times.length === steps.length;
+  // reflow: lay the steps end to end at their own lengths (a layout fitting them to a clip).
+  const same = times.length === steps.length && !opts.reflow;
   let block: string, end: number;
   if (same) {
     // Each step at its own start: render one by one so retimed gaps survive.
@@ -367,6 +377,95 @@ export function replaceDemoSteps(html: string, steps: ScreenDemoStep[], page: { 
   let out = html.slice(0, span.from) + block + html.slice(span.to);
   const root = /(<[^>]*data-composition-id[^>]*data-duration=")([\d.]+)(")/.exec(out);
   if (root && Number(root[2]) < end) out = out.replace(root[0], `${root[1]}${round(end)}${root[3]}`);
+  return out;
+}
+
+const box4 = (v: string | undefined): Box | undefined => {
+  if (!v) return undefined;
+  const [x, y, w, h] = v.split(",").map(Number);
+  return { x, y, w, h };
+};
+
+/** The demo's steps read back from its HTML: stills, timing, boxes and typing stills. */
+export function demoStepsOf(html: string): ScreenDemoStep[] {
+  const attr = (tag: string, name: string) => new RegExp(`\\s${name}="([^"]*)"`).exec(tag)?.[1];
+  return [...html.matchAll(/<img id="step(\d+)"[^>]*class="clip demo-step"[^>]*>/g)].map((m) => {
+    const tag = m[0], n = m[1];
+    const from = box4(attr(tag, "data-drag-from")), to = box4(attr(tag, "data-drag-to"));
+    const cfrom = box4(attr(tag, "data-connect-from")), cto = box4(attr(tag, "data-connect-to"));
+    const typeBox = box4(attr(tag, "data-type"));
+    const frames = [...html.matchAll(new RegExp(`<img id="step${n}-typed\\d+" src="([^"]*)"`, "g"))].map((f) => f[1]);
+    return {
+      src: attr(tag, "src") ?? "",
+      seconds: Number(attr(tag, "data-duration") ?? 0),
+      focus: box4(attr(tag, "data-focus")),
+      click: box4(attr(tag, "data-click")),
+      drag: from && to ? { from, to } : undefined,
+      connect: cfrom && cto ? { from: cfrom, to: cto } : undefined,
+      type: typeBox ? { box: typeBox, frames } : undefined,
+    };
+  });
+}
+
+/** Index just past the </div> that closes the <div at `from`. */
+function divEnd(html: string, from: number): number {
+  const re = /<div\b|<\/div>/g;
+  re.lastIndex = from;
+  let depth = 0;
+  for (let m = re.exec(html); m; m = re.exec(html)) {
+    depth += m[0] === "</div>" ? -1 : 1;
+    if (depth === 0) return m.index + m[0].length;
+  }
+  return -1;
+}
+
+/**
+ * The demo in another layout, once: whatever layout it has (its area and
+ * clip) is taken out, the new one put in, and with a clip the steps are
+ * spread over the clip's length so both end together. Everything else, titles
+ * included, stays. A split fills each half (fit cover). Null when the HTML
+ * holds no demo. After this the composition is ordinary HTML again.
+ */
+export function applyLayout(html: string, layout: DemoLayout): string | null {
+  if (!/<div id="cam"/.test(html) || !stepsSpan(html)) return null;
+  let out = html
+    .replace(/ *<!-- layout-clip -->[\s\S]*?<!-- \/layout-clip -->\n?/, "")
+    .replace(/ *<video id="clip"[\s\S]*?<\/video>\n?/, "")
+    .replace(/ *<audio id="clip-audio"[^>]*><\/audio>\n?/, "");
+  const area = out.indexOf('<div id="demo-area"');
+  if (area >= 0) {
+    const end = divEnd(out, area);
+    const lineStart = out.lastIndexOf("\n", area) + 1;
+    const innerFrom = out.indexOf(">", area) + 1;
+    const inner = out.slice(innerFrom, end - "</div>".length).replace(/^\n/, "").replace(/ *$/, "");
+    const after = out.slice(end).replace(/^<!-- \/demo-area -->/, "").replace(/^\n/, "");
+    out = out.slice(0, lineStart) + inner + after;
+  }
+
+  const width = Number(/data-width="(\d+)"/.exec(out)?.[1] ?? 1920), height = Number(/data-height="(\d+)"/.exec(out)?.[1] ?? 1080);
+  const { open, close, clip } = layoutParts(layout, { width, height });
+  const cam = out.indexOf('<div id="cam"');
+  const camLine = out.lastIndexOf("\n", cam) + 1;
+  const camEnd = divEnd(out, cam);
+  const camEndLine = out.indexOf("\n", camEnd) + 1 || out.length;
+  out = out.slice(0, camLine) + open + out.slice(camLine, camEndLine) + close + clip + out.slice(camEndLine);
+
+  if (layout.kind !== "full") {
+    const page = {
+      width: Number(/data-page-width="(\d+)"/.exec(out)?.[1] ?? 1600),
+      height: Number(/data-page-height="(\d+)"/.exec(out)?.[1] ?? 900),
+    };
+    const steps = demoStepsOf(out);
+    const fitted = fitSeconds(steps.map((st) => st.seconds), steps.map((st) => minimumSeconds(st)), layout.seconds);
+    out = replaceDemoSteps(out, steps.map((st, i) => ({ ...st, seconds: fitted[i] })), page, { reflow: true }) ?? out;
+    const times = demoStepTimes(out);
+    const last = times[times.length - 1];
+    const length = Math.max(layout.seconds, last ? last.start + last.seconds : 0);
+    out = out.replace(/(<[^>]*data-composition-id[^>]*data-duration=")[\d.]+(")/, `$1${round(length)}$2`);
+    if (layout.kind === "split" && !/<div id="win"[^>]*data-fit=/.test(out)) {
+      out = out.replace(/(<div id="win"[^>]*?)(\s*\n\s*style=|\s+style=)/, '$1 data-fit="cover"$2');
+    }
+  }
   return out;
 }
 

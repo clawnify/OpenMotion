@@ -10,6 +10,7 @@ import {
 } from "@clawnify/app/client";
 import { starterHtml } from "./starter";
 import { FORMATS, formatOf, frameOf, ratioLabel, withFrame } from "../shared/format";
+import { applyLayout, type DemoLayout } from "../shared/screen-demo";
 import { Timeline, type TimelineEdit } from "./timeline";
 import { compositionLength } from "../shared/length";
 import type { Lint } from "../server/lint";
@@ -74,6 +75,8 @@ interface Asset {
   name: string;
   content_type: string;
   size: number;
+  /** Seconds, for video and audio, when it was measured at upload. */
+  duration?: number | null;
 }
 
 interface RenderJob {
@@ -342,6 +345,95 @@ function ShapeMenu({
             </CommandItem>
           ))}
         </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+const LAYOUTS = [
+  { id: "full", name: "Full frame", hint: "The demo fills the video" },
+  { id: "top", name: "Demo on top, clip below", hint: "A talking head under the demo" },
+  { id: "bottom", name: "Clip on top, demo below", hint: "A talking head over the demo" },
+  { id: "pip", name: "Clip in a bubble", hint: "The demo full, the clip in a corner" },
+] as const;
+type LayoutId = (typeof LAYOUTS)[number]["id"];
+
+/** Which layout a demo is in now, read from its HTML. */
+function currentLayout(html: string): LayoutId {
+  const area = /<div id="demo-area"[^>]*top:([^;]+);/.exec(html);
+  if (area) return area[1].trim() === "0" ? "top" : "bottom";
+  if (/<video id="clip"[^>]*\s+style="[^"]*border-radius:50%/.test(html)) return "pip";
+  return "full";
+}
+
+/** A video's length, from the upload record or from the file itself. */
+async function clipSeconds(a: Asset): Promise<number> {
+  if (a.duration && a.duration > 0) return a.duration;
+  return new Promise((done) => {
+    const v = document.createElement("video");
+    v.preload = "metadata";
+    v.onloadedmetadata = () => done(Number.isFinite(v.duration) ? v.duration : 0);
+    v.onerror = () => done(0);
+    v.src = `/api/uploads/${a.key}`;
+  });
+}
+
+/**
+ * Picks a layout for a demo, then, for one with a clip, the clip from the
+ * Media library. Applying it is a one-off: the result is ordinary HTML.
+ */
+function LayoutMenu({ current, onPick, children }: { current: LayoutId; onPick: (l: DemoLayout) => void; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const [pending, setPending] = useState<LayoutId | null>(null);
+  const [videos, setVideos] = useState<Asset[] | null>(null);
+  useEffect(() => {
+    if (!open) return setPending(null);
+    api.get<Asset[]>("/api/assets").then((all) => setVideos(all.filter((a) => a.content_type.startsWith("video/"))));
+  }, [open]);
+
+  async function choose(id: LayoutId, clip?: Asset) {
+    if (id === "full") return finish({ kind: "full" });
+    if (!clip) return setPending(id);
+    const seconds = await clipSeconds(clip);
+    const src = `assets/${clip.key}`;
+    finish(id === "pip" ? { kind: "pip", clip: src, seconds } : { kind: "split", demo: id === "top" ? "top" : "bottom", clip: src, seconds });
+  }
+  function finish(l: DemoLayout) {
+    setOpen(false);
+    onPick(l);
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>{children}</PopoverTrigger>
+      <PopoverContent align="start">
+        {pending === null ? (
+          <Command label="Layout">
+            {LAYOUTS.map((o) => (
+              <CommandItem key={o.id} value={o.id} onSelect={() => choose(o.id)}>
+                <span className="flex-1 min-w-0">
+                  <span className="block truncate">{o.name}</span>
+                  <span className="block truncate text-fine text-faint">{o.hint}</span>
+                </span>
+                <Check className={`w-4 h-4 shrink-0 ${o.id === current ? "" : "invisible"}`} aria-hidden />
+              </CommandItem>
+            ))}
+          </Command>
+        ) : videos && videos.length === 0 ? (
+          <p className="p-3 text-body-sm text-muted max-w-64">Upload a video in Media first, then pick it here.</p>
+        ) : (
+          <Command label="Clip">
+            <CommandGroup heading="Pick the clip">
+              {(videos ?? []).map((a) => (
+                <CommandItem key={a.id} value={a.key} onSelect={() => choose(pending, a)}>
+                  <Video className="w-4 h-4 shrink-0 text-muted" />
+                  <span className="flex-1 min-w-0 truncate">{a.name}</span>
+                  {a.duration ? <span className="text-fine text-muted tabular-nums">{a.duration.toFixed(1)}s</span> : null}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </Command>
+        )}
       </PopoverContent>
     </Popover>
   );
@@ -757,6 +849,18 @@ function Editor({
     }
   }
 
+  const isDemo = /class="clip demo-step"/.test(html);
+
+  /** Put the demo in a layout, once (shared/screen-demo.ts applyLayout). One undo step. */
+  function changeLayout(layout: DemoLayout) {
+    const next = applyLayout(html, layout);
+    if (!next || next === html) return;
+    if (pendingBefore.current === null) pendingBefore.current = html;
+    setSelectedClip(null);
+    setHtml(next);
+    persist(next, 0);
+  }
+
   async function save() {
     setSaving(true);
     try {
@@ -858,6 +962,18 @@ function Editor({
                       <p className="text-fine text-faint mt-1.5 tabular-nums">
                         {frame.width} × {frame.height}
                       </p>
+                    </div>
+                  )}
+                  {isDemo && (
+                    <div>
+                      <div className="text-label text-muted mb-1.5">Layout</div>
+                      <LayoutMenu current={currentLayout(html)} onPick={changeLayout}>
+                        <button className={`${btnSecondary} w-full justify-between`}>
+                          <span className="truncate">{LAYOUTS.find((o) => o.id === currentLayout(html))?.name}</span>
+                          <ChevronDown className="w-4 h-4 shrink-0" />
+                        </button>
+                      </LayoutMenu>
+                      <p className="text-fine text-faint mt-1.5">A starting point: change anything after.</p>
                     </div>
                   )}
                   <div>

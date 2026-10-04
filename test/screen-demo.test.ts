@@ -1,7 +1,7 @@
 // Run: pnpm test (Node 22+, no dependencies).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { screenDemoHtml, screenDemoProblems, typingWindow, defaultSeconds, demoSpecOf, fitSeconds, replaceDemoSteps, demoStepTimes, withDemoSpec, type ScreenDemoOptions } from "../src/shared/screen-demo.ts";
+import { screenDemoHtml, screenDemoProblems, typingWindow, defaultSeconds, demoSpecOf, fitSeconds, replaceDemoSteps, demoStepTimes, withDemoSpec, applyLayout, demoStepsOf, type ScreenDemoOptions } from "../src/shared/screen-demo.ts";
 import { compositionLength } from "../src/shared/length.ts";
 
 const demo: ScreenDemoOptions = {
@@ -172,14 +172,14 @@ test("steps spread over a clip's length in proportion, never below their minimum
 test("split: the demo fills its half, the clip the other, muted with its sound on <audio>", () => {
   const clip = { clip: "assets/talk.mp4", seconds: 7.5 };
   const top = screenDemoHtml({ ...demo, frame: { width: 1080, height: 1920 }, layout: { kind: "split", demo: "top", ...clip } });
-  assert.match(top, /<div id="demo-area" style="position:absolute;left:0;top:0px;width:1080px;height:960px;overflow:hidden">\s*<div id="cam"/);
-  assert.match(top, /<video id="clip" src="assets\/talk.mp4" class="clip" data-start="0" data-duration="7.5" data-track-index="2" muted playsinline\s+style="position:absolute;left:0;top:960px;width:1080px;height:960px;object-fit:cover/);
+  assert.match(top, /<div id="demo-area" style="position:absolute;left:0;top:0;width:100%;height:50%;overflow:hidden">\s*<div id="cam"/);
+  assert.match(top, /<video id="clip" src="assets\/talk.mp4" class="clip" data-start="0" data-duration="7.5" data-track-index="2" muted playsinline\s+style="position:absolute;left:0;top:50%;width:100%;height:50%;object-fit:cover/);
   assert.match(top, /<audio id="clip-audio" src="assets\/talk.mp4" class="clip" data-start="0" data-duration="7.5"/);
   // The video runs as long as the longer of the two.
   assert.equal(compositionLength(top), 10);
   const bottom = screenDemoHtml({ ...demo, frame: { width: 1080, height: 1920 }, layout: { kind: "split", demo: "bottom", ...clip } });
-  assert.match(bottom, /id="demo-area" style="position:absolute;left:0;top:960px/);
-  assert.match(bottom, /<video id="clip"[^>]*\s+style="position:absolute;left:0;top:0px/);
+  assert.match(bottom, /id="demo-area" style="position:absolute;left:0;top:50%/);
+  assert.match(bottom, /<video id="clip"[^>]*\s+style="position:absolute;left:0;top:0;/);
 });
 
 test("pip: the demo fills the video, the clip is a round bubble in the corner", () => {
@@ -234,3 +234,52 @@ test("the spec is replaced, or added to a composition without one", () => {
   assert.deepEqual(demoSpecOf(withDemoSpec(withSpec, { url: "https://b.example" })), { url: "https://b.example" });
   assert.deepEqual(demoSpecOf(withDemoSpec(screenDemoHtml(demo), { url: "https://c.example" })), { url: "https://c.example" });
 });
+
+const titled = (html: string) => html.replace(/(\n  <script src="https:\/\/cdn)/, '\n  <h1 id="title" class="clip" data-start="0" data-duration="2" data-track-index="5">Hi</h1>$1');
+const count = (html: string, needle: string) => html.split(needle).length - 1;
+
+test("applyLayout: full to split wraps the demo, adds the clip, fits the steps and fills the half", () => {
+  const html = applyLayout(titled(screenDemoHtml({ ...demo, frame: { width: 1080, height: 1920 } })), { kind: "split", demo: "top", clip: "assets/talk.mp4", seconds: 7.5 })!;
+  assert.match(html, /<div id="demo-area"[^>]*top:0;width:100%;height:50%[^>]*>\n  <div id="cam"/);
+  assert.equal(count(html, 'id="clip"'), 1);
+  assert.equal(count(html, 'id="title"'), 1);
+  assert.match(html, /<div id="win"[^>]*data-fit="cover"/);
+  assert.deepEqual(demoStepTimes(html), [{ start: 0, seconds: 3 }, { start: 3, seconds: 2.625 }, { start: 5.625, seconds: 1.875 }]);
+  assert.equal(compositionLength(html), 7.5);
+  assert.equal(divBalance(html), 0);
+});
+
+test("applyLayout: split to pip takes the area out and swaps the clip for a bubble; back to full removes it", () => {
+  const split = applyLayout(screenDemoHtml(demo), { kind: "split", demo: "bottom", clip: "assets/talk.mp4", seconds: 7.5 })!;
+  const pip = applyLayout(titled(split), { kind: "pip", clip: "assets/other.mp4", seconds: 9 })!;
+  assert.equal(count(pip, 'id="demo-area"'), 0);
+  assert.equal(count(pip, 'id="clip"'), 1);
+  assert.match(pip, /<video id="clip" src="assets\/other.mp4"[^>]*\s+style="[^"]*border-radius:50%/);
+  assert.equal(count(pip, 'id="title"'), 1);
+  assert.equal(compositionLength(pip), 9);
+  const full = applyLayout(pip, { kind: "full" })!;
+  assert.equal(count(full, 'id="clip"'), 0);
+  assert.equal(count(full, 'id="clip-audio"'), 0);
+  assert.equal(count(full, 'id="title"'), 1);
+  assert.equal(demoStepsOf(full).length, 3);
+  assert.equal(divBalance(full), 0);
+});
+
+test("applyLayout works on a demo made before the markers, and refuses non-demos", () => {
+  const legacy = screenDemoHtml({ ...demo, layout: { kind: "split", demo: "top", clip: "assets/talk.mp4", seconds: 7.5 } })
+    .replace(/ *<!-- \/?(layout-clip|demo-steps) -->\n/g, "").replace("<!-- /demo-area -->", "");
+  const pip = applyLayout(legacy, { kind: "pip", clip: "assets/talk.mp4", seconds: 7.5 })!;
+  assert.equal(count(pip, 'id="demo-area"'), 0);
+  assert.equal(count(pip, 'id="clip"'), 1);
+  assert.equal(divBalance(pip), 0);
+  assert.equal(applyLayout("<div>no demo</div>", { kind: "full" }), null);
+});
+
+test("demoStepsOf reads back what the builder wrote", () => {
+  const steps = demoStepsOf(screenDemoHtml(demo));
+  assert.deepEqual(steps.map((x) => [x.src, x.seconds, x.click?.x]), [["assets/a.png", 4, 1316], ["assets/b.png", 3.5, 26], ["assets/c.png", 2.5, undefined]]);
+});
+
+function divBalance(html: string): number {
+  return count(html, "<div") - count(html, "</div>");
+}
