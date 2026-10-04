@@ -7,7 +7,9 @@
 // inside an iframe nor rewind it, each render worker loads it afresh, and most
 // apps refuse to be framed. Stills render the same every time, from any page
 // that can be opened in a browser. Typing is real too: stills taken while the
-// text went in, played over the step as it is typed.
+// text went in, played over the step as it is typed. So is what the app does
+// when clicked (a menu opening, a modal fading in): the capture records it as
+// a short video, played from the moment the cursor presses.
 //
 // The composition this returns carries a small script (the "kit") that reads
 // each step's timing and boxes from its attributes when the page loads. So
@@ -45,6 +47,12 @@ export interface ScreenDemoStep {
   connect?: Move;
   /** Click into `box` and type: `frames` are stills taken while typing, in order. */
   type?: { box: Box; frames: string[] };
+  /**
+   * With `click`: what the page did after the click, as a video (`src`) that
+   * starts the moment the click lands and lasts `seconds`. It plays over this
+   * step's still and into the next one, which shows the state it settles on.
+   */
+  motion?: { src: string; seconds: number };
 }
 
 /**
@@ -97,6 +105,8 @@ export interface ScreenDemoOptions {
 /** The shortest step each action can play in: get there, then act. */
 export const MIN_STEP = { click: 2, drag: 2.2, connect: 2.2, type: 2.5 } as const;
 const ACTIONS = ["click", "drag", "connect", "type"] as const;
+/** The kit presses a step's click this long before the step ends. */
+export const PRESS_BEFORE_END = 0.3;
 
 const round = (n: number) => Math.round(n * 1000) / 1000;
 const boxAttr = (b: Box) => [b.x, b.y, b.w, b.h].map(Math.round).join(",");
@@ -141,6 +151,11 @@ export function screenDemoProblems(opts: ScreenDemoOptions): string[] {
       box(s.type.box, `${n}.type.box`);
       if (!s.type.frames.length) out.push(`${n}.type.frames: at least one`);
       if (s.type.frames.some(badSrc)) out.push(`${n}.type.frames: assets/<key> paths`);
+    }
+    if (s.motion) {
+      if (!s.click) out.push(`${n}.motion: only with a click`);
+      if (badSrc(s.motion.src)) out.push(`${n}.motion.src: an assets/<key> path`);
+      if (!(s.motion.seconds > 0)) out.push(`${n}.motion.seconds: above 0`);
     }
   });
   return out;
@@ -282,6 +297,9 @@ const STEPS_CLOSE = "      <!-- /demo-steps -->";
 /**
  * The demo's stills as clips, from `startAt`, between markers a refresh
  * replaces (see replaceDemoSteps). Typing stills are clips over their step.
+ * A click's motion video comes after every still, so it plays on top of the
+ * next one as well, and starts at the press (the kit presses PRESS_BEFORE_END
+ * before the step ends).
  */
 export function stepsHtml(
   steps: ScreenDemoStep[],
@@ -291,6 +309,7 @@ export function stepsHtml(
   const fill = `position:absolute;left:0;top:0;width:${page.width}px;height:${page.height}px`;
   let t = startAt;
   const imgs: string[] = [];
+  const motions: string[] = [];
   steps.forEach((s, i) => {
     const attrs = [
       `id="step${i + 1}"`,
@@ -319,9 +338,19 @@ export function stepsHtml(
         );
       });
     }
+    if (s.motion && s.click) {
+      // At least until the next still: a motion shorter than the wait would
+      // let this step's own still (the state before the click) flash back.
+      // Past its end a video holds its last frame.
+      const at = Math.max(t, t + s.seconds - PRESS_BEFORE_END);
+      const seconds = Math.max(s.motion.seconds, t + s.seconds - at);
+      motions.push(
+        `      <video id="step${i + 1}-motion" src="${esc(s.motion.src)}" class="clip demo-motion" data-start="${round(at)}" data-duration="${round(seconds)}" data-track-index="1" muted playsinline\n           style="${fill}"></video>`,
+      );
+    }
     t += s.seconds;
   });
-  return { html: [STEPS_OPEN, ...imgs, STEPS_CLOSE].join("\n"), end: t };
+  return { html: [STEPS_OPEN, ...imgs, ...motions, STEPS_CLOSE].join("\n"), end: t };
 }
 
 /** Where the stills sit in a demo's HTML, with or without markers (demos made before them). */
@@ -365,7 +394,7 @@ export function replaceDemoSteps(
     // Each step at its own start: render one by one so retimed gaps survive.
     const parts = steps.map((s, i) => stepsHtml([{ ...s, seconds: times[i].seconds }], page, times[i].start));
     const inner = parts.map((p, i) =>
-      p.html.split("\n").slice(1, -1).join("\n").replace(/id="step1(-typed\d+)?"/g, (_m, typed) => `id="step${i + 1}${typed ?? ""}"`),
+      p.html.split("\n").slice(1, -1).join("\n").replace(/id="step1(-typed\d+|-motion)?"/g, (_m, typed) => `id="step${i + 1}${typed ?? ""}"`),
     );
     block = [STEPS_OPEN, ...inner, STEPS_CLOSE].join("\n");
     end = Math.max(...parts.map((p) => p.end));
@@ -395,6 +424,7 @@ export function demoStepsOf(html: string): ScreenDemoStep[] {
     const cfrom = box4(attr(tag, "data-connect-from")), cto = box4(attr(tag, "data-connect-to"));
     const typeBox = box4(attr(tag, "data-type"));
     const frames = [...html.matchAll(new RegExp(`<img id="step${n}-typed\\d+" src="([^"]*)"`, "g"))].map((f) => f[1]);
+    const motion = new RegExp(`<video id="step${n}-motion"[^>]*>`).exec(html)?.[0];
     return {
       src: attr(tag, "src") ?? "",
       seconds: Number(attr(tag, "data-duration") ?? 0),
@@ -403,6 +433,7 @@ export function demoStepsOf(html: string): ScreenDemoStep[] {
       drag: from && to ? { from, to } : undefined,
       connect: cfrom && cto ? { from: cfrom, to: cto } : undefined,
       type: typeBox ? { box: typeBox, frames } : undefined,
+      motion: motion ? { src: attr(motion, "src") ?? "", seconds: Number(attr(motion, "data-duration") ?? 0) } : undefined,
     };
   });
 }
@@ -591,7 +622,7 @@ const KIT = `    // Screen-demo kit: builds the camera, cursor and actions from 
         else if (pair) camTo(t + 0.2, 1, "power3.inOut", fitWide(pair), mid(pair));
         else camTo(t + 0.25, 0.9, "power3.inOut", 1, { x: PW / 2, y: PH / 2 });
         if (st.click) {
-          var at = end - 0.3, r = reach(st.click, at);
+          var at = end - ${PRESS_BEFORE_END}, r = reach(st.click, at);
           camTo(Math.max(t + 1.4, r.start - 0.2), Math.max(0.4, at - Math.max(t + 1.4, r.start - 0.2)), "sine.inOut", 1.35, mid(st.click));
           press(at); ripple(r.point, at + 0.03);
         }

@@ -283,3 +283,45 @@ test("demoStepsOf reads back what the builder wrote", () => {
 function divBalance(html: string): number {
   return count(html, "<div") - count(html, "</div>");
 }
+
+const moving: ScreenDemoOptions = {
+  ...demo,
+  steps: demo.steps.map((st, i) => (i === 1 ? { ...st, motion: { src: "assets/b-motion.mp4", seconds: 0.4 } } : st)),
+};
+
+test("a click's motion plays from the press, over every still, muted, for its own length", () => {
+  const html = screenDemoHtml(moving);
+  // Step 2 runs 4 to 7.5 and the kit presses 0.3 s before it ends.
+  assert.match(html, /<video id="step2-motion" src="assets\/b-motion.mp4" class="clip demo-motion" data-start="7.2" data-duration="0.4" data-track-index="1" muted playsinline/);
+  assert.ok(html.indexOf('id="step2-motion"') > html.indexOf('id="step3"'), "after the next still, so it plays on top of it");
+  assert.ok(html.indexOf('id="step2-motion"') < html.indexOf("<!-- /demo-steps -->"));
+  assert.match(html, /var at = end - 0\.3, r = reach\(st\.click, at\)/);
+  assert.equal(compositionLength(html), 10);
+});
+
+test("a motion shorter than the wait for the next still holds its last frame until then", () => {
+  const short = { ...moving, steps: moving.steps.map((st) => st.motion ? { ...st, motion: { ...st.motion, seconds: 0.19 } } : st) };
+  // Pressed at 7.2, the next still at 7.5: never the pre-click still in between.
+  assert.match(screenDemoHtml(short), /id="step2-motion"[^>]*data-start="7.2" data-duration="0.3"/);
+});
+
+test("motion goes with a click only, and needs a path and a length", () => {
+  const bad = { ...demo, steps: [{ src: "assets/a.png", seconds: 3, motion: { src: 'x"', seconds: 0 } }] };
+  assert.deepEqual(screenDemoProblems(bad), [
+    "steps[0].motion: only with a click",
+    "steps[0].motion.src: an assets/<key> path",
+    "steps[0].motion.seconds: above 0",
+  ]);
+  assert.deepEqual(screenDemoProblems(moving), []);
+});
+
+test("motion is read back, kept on its step through a refresh, and through a layout change", () => {
+  const html = screenDemoHtml(moving);
+  assert.deepEqual(demoStepsOf(html).map((x) => x.motion), [undefined, { src: "assets/b-motion.mp4", seconds: 0.4 }, undefined]);
+  const fresh = moving.steps.map((st, i) => ({ ...st, src: `assets/n${i + 1}.png`, motion: st.motion && { src: "assets/n-motion.mp4", seconds: 0.5 } }));
+  const after = replaceDemoSteps(html, fresh, page)!;
+  assert.match(after, /<video id="step2-motion" src="assets\/n-motion.mp4"[^>]*data-start="7.2" data-duration="0.5"/);
+  assert.equal(count(after, "demo-motion"), 1);
+  const split = applyLayout(html, { kind: "split", demo: "top", clip: "assets/talk.mp4", seconds: 12 })!;
+  assert.equal(demoStepsOf(split)[1].motion?.src, "assets/b-motion.mp4");
+});
