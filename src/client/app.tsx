@@ -11,6 +11,7 @@ import {
 import { starterHtml } from "./starter";
 import { FORMATS, formatOf, frameOf, ratioLabel, withFrame } from "../shared/format";
 import { applyLayout, type DemoLayout } from "../shared/screen-demo";
+import { mediaHtml, mediaId, mediaKind, placeMedia } from "../shared/media";
 import { Timeline, type TimelineEdit } from "./timeline";
 import { compositionLength } from "../shared/length";
 import type { Lint } from "../server/lint";
@@ -116,7 +117,7 @@ const api = {
 
 // ── app ──────────────────────────────────────────────────────────────
 
-type Tab = "compose" | "timeline" | "media";
+type Tab = "compose" | "timeline";
 
 // Minimal history-based router: `/` = gallery, `/<id>` = editor for that id.
 function useRouter() {
@@ -556,7 +557,7 @@ function Editor({
     onlySaveAfterUserInteractions: true,
   });
   const hLayout = useDefaultLayout({
-    id: "ove:editor-h:v2",
+    id: "ove:editor-h:v3",
     storage: localStorage,
     onlySaveAfterUserInteractions: true,
   });
@@ -811,6 +812,51 @@ function Editor({
     persist(next, 0);
   }
 
+  /**
+   * A Media library item, added from the playhead on new lanes above the
+   * others (shared/media.ts), drawn on top of everything, and selected so the
+   * inspector shows it. One undo step.
+   */
+  function addMedia(a: Asset) {
+    const kind = mediaKind(a.content_type);
+    if (!kind) return;
+    try {
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const root = doc.querySelector("[data-composition-id]");
+      if (!root) return;
+      const stated = parseFloat(root.getAttribute("data-duration") || "");
+      const place = placeMedia({
+        kind,
+        seconds: a.duration,
+        playhead: timeRef.current,
+        fps,
+        tracks: parseClips(html).tracks,
+        length: stated > 0 ? stated : null,
+      });
+      const taken = new Set(Array.from(doc.querySelectorAll("[id]"), (el) => el.id));
+      const tpl = doc.createElement("template");
+      tpl.innerHTML = mediaHtml(kind, `assets/${a.key}`, mediaId(a.key, taken), place);
+      // Last of the visible elements: on top of everything, scripts stay last.
+      const script = Array.from(root.children).find((el) => el.tagName === "SCRIPT");
+      for (const el of Array.from(tpl.content.children)) {
+        root.insertBefore(doc.createTextNode("\n  "), script ?? null);
+        root.insertBefore(el, script ?? null);
+      }
+      if (script) root.insertBefore(doc.createTextNode("\n  "), script);
+      if (place.length) root.setAttribute("data-duration", String(place.length));
+      const next = root.outerHTML;
+      if (pendingBefore.current === null) pendingBefore.current = html;
+      setHtml(next);
+      persist(next, 0);
+      // The visual (or the sound, for audio) is the first clip it added.
+      const added = parseClips(next).clips.find((c) => c.track === place.track && c.start === place.start);
+      setSelectedClip(added ? added.index : null);
+      setTab("timeline");
+    } catch {
+      /* malformed HTML mid-edit: nothing to add to */
+    }
+  }
+
   function step(dir: "undo" | "redo") {
     const h = history.current;
     const to = dir === "undo" ? h.past.pop() : h.future.pop();
@@ -917,7 +963,13 @@ function Editor({
             defaultLayout={hLayout.defaultLayout}
             onLayoutChanged={hLayout.onLayoutChanged}
           >
-            <Panel id="preview" defaultSize="74%" minSize="45%" className="min-w-0 p-5">
+            <Panel id="media" defaultSize="18%" minSize="12%" maxSize="32%" className="bg-surface min-w-0">
+              <MediaSidebar changes={changes} onAdd={addMedia} />
+            </Panel>
+
+            <Separator className="ove-sep-x" />
+
+            <Panel id="preview" defaultSize="58%" minSize="35%" className="min-w-0 p-5">
               {/* Preview stage: the harness scales + centers the composition,
                   letterboxing it inside this black stage (any panel shape). */}
               <div className="h-full w-full min-h-0 min-w-0 bg-black rounded-md overflow-hidden shadow-edge">
@@ -935,7 +987,7 @@ function Editor({
 
             <Separator className="ove-sep-x" />
 
-            <Panel id="inspector" defaultSize="26%" minSize="18%" maxSize="46%" className="bg-surface overflow-y-auto">
+            <Panel id="inspector" defaultSize="24%" minSize="16%" maxSize="46%" className="bg-surface overflow-y-auto">
               {selClip ? (
                 <Inspector
                   key={selClip.index}
@@ -1008,7 +1060,7 @@ function Editor({
           )}
           <div className="px-5 pt-3 shrink-0 flex items-center gap-3">
             <div className="inline-flex items-center gap-0.5 rounded-full bg-surface-sunken p-0.5">
-              {(["timeline", "compose", "media"] as Tab[]).map((t) => (
+              {(["timeline", "compose"] as Tab[]).map((t) => (
                 <button
                   key={t}
                   onClick={() => setTab(t)}
@@ -1079,7 +1131,6 @@ function Editor({
             formatTime={(t) => fmtTC(t, fps)}
           />
         )}
-        {tab === "media" && <MediaPanel changes={changes} />}
           </div>
         </Panel>
       </Group>
@@ -1490,10 +1541,38 @@ function toHex(color: string): string {
 
 // ── media ────────────────────────────────────────────────────────────
 
-function MediaPanel({ changes }: { changes: number }) {
-  const [assets, setAssets] = useState<Asset[]>([]);
+/** A file's length in seconds, read from its metadata; null for a still, or
+ *  when it cannot be read in 3 s. Measured here because the upload streams the
+ *  bytes away and the server never decodes media. */
+function probeFile(file: File): Promise<number | null> {
+  if (!/^(video|audio)\//.test(file.type)) return Promise.resolve(null);
+  return new Promise((done) => {
+    const url = URL.createObjectURL(file);
+    const el = document.createElement(file.type.startsWith("audio/") ? "audio" : "video");
+    const finish = (d: number | null) => {
+      clearTimeout(timer);
+      URL.revokeObjectURL(url);
+      done(d);
+    };
+    const timer = setTimeout(() => finish(null), 3000);
+    el.preload = "metadata";
+    el.onloadedmetadata = () => finish(Number.isFinite(el.duration) && el.duration > 0 ? el.duration : null);
+    el.onerror = () => finish(null);
+    el.src = url;
+  });
+}
+
+const fmtSeconds = (d: number) => (d >= 60 ? `${Math.floor(d / 60)}:${String(Math.round(d % 60)).padStart(2, "0")}` : `${d.toFixed(1)} s`);
+
+/**
+ * The Media library beside the preview, as in OpenVideo: click an item to put
+ * it in the video at the playhead. Files dropped anywhere on it upload.
+ */
+function MediaSidebar({ changes, onAdd }: { changes: number; onAdd: (a: Asset) => void }) {
+  const [assets, setAssets] = useState<Asset[] | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const [confirmDel, setConfirmDel] = useState<Asset | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -1509,9 +1588,15 @@ function MediaPanel({ changes }: { changes: number }) {
     setUploading(true);
     try {
       for (const f of Array.from(files)) {
+        const probe = probeFile(f);
         const fd = new FormData();
         fd.append("file", f);
-        await fetch("/api/assets", { method: "POST", body: fd });
+        const res = await fetch("/api/assets", { method: "POST", body: fd });
+        if (!res.ok) continue;
+        const row = (await res.json()) as Asset;
+        // The length lands after the upload, so a slow probe never holds it up.
+        const duration = await probe;
+        if (duration) await api.send("PATCH", `/api/assets/${row.id}`, { duration });
       }
       await load();
     } finally {
@@ -1530,73 +1615,99 @@ function MediaPanel({ changes }: { changes: number }) {
     setTimeout(() => setCopied(null), 1200);
   }
 
-  const isImg = (t: string) => t.startsWith("image/");
+  const addable = (a: Asset) => mediaKind(a.content_type) !== null;
+  // Row actions show on hover or keyboard focus, and always on touch screens.
+  const reveal = "opacity-0 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100";
 
   return (
-    <div className="max-w-3xl space-y-4">
-      <div
-        onClick={() => fileRef.current?.click()}
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => {
-          e.preventDefault();
-          upload(e.dataTransfer.files);
-        }}
-        className="flex flex-col items-center gap-2 py-8 rounded-md border-2 border-dashed border-border bg-surface text-muted text-body-sm cursor-pointer hover:border-faint"
-      >
-        {uploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Upload className="w-5 h-5" />}
-        Drop a logo or product demo here, or click to upload
+    <div
+      className={`h-full flex flex-col min-h-0 ${dragging ? "bg-surface-sunken" : ""}`}
+      onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragging(false);
+        upload(e.dataTransfer.files);
+      }}
+    >
+      <div className="px-4 pt-4 pb-2 shrink-0 flex items-center gap-2">
+        <h2 className="flex-1 text-label text-muted">Media</h2>
+        <button onClick={() => fileRef.current?.click()} disabled={uploading} className={btnSecondary}>
+          {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+          Upload
+        </button>
         <input
           ref={fileRef}
           type="file"
+          accept="image/*,video/*,audio/*"
           multiple
           hidden
-          onChange={(e) => upload(e.target.files)}
+          onChange={(e) => {
+            upload(e.target.files);
+            e.target.value = "";
+          }}
         />
       </div>
 
-      <p className="text-fine text-muted">
-        Reference media in your composition HTML by its path, e.g.{" "}
-        <code className="px-1 py-0.5 bg-surface-sunken rounded-xs">&lt;img src="assets/logo.png"&gt;</code>. Only
-        referenced assets are shipped to the renderer.
-      </p>
-
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-        {assets.map((a) => (
-          <div key={a.id} className={`${card} overflow-hidden`}>
-            <div className="aspect-video bg-surface-sunken grid place-items-center overflow-hidden">
-              {isImg(a.content_type) ? (
-                <img src={`/api/uploads/${a.key}`} alt={a.name} className="w-full h-full object-contain" />
-              ) : a.content_type.startsWith("video/") ? (
-                <video src={`/api/uploads/${a.key}`} className="w-full h-full object-cover" muted />
-              ) : (
-                <Film className="w-6 h-6 text-faint" />
-              )}
-            </div>
-            <div className="p-2 flex items-center gap-1">
-              <code className="flex-1 text-fine truncate text-muted">assets/{a.key}</code>
-              <button onClick={() => copy(a.key)} className={btnIcon} aria-label={`Copy path for ${a.name}`} title="Copy path">
-                {copied === a.key ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-              </button>
+      <div className="flex-1 overflow-y-auto px-4 pb-4 min-h-0">
+        {assets?.length === 0 && (
+          <EmptyState
+            icon={<Film className="w-8 h-8" />}
+            title="No media yet"
+            body="Upload or drop a logo, a photo, a clip or a sound, then click it to put it in the video at the playhead."
+          />
+        )}
+        <ul className="space-y-2">
+          {assets?.map((a) => (
+            <li key={a.id} className={`${card} group relative overflow-hidden`}>
               <button
-                onClick={() => setConfirmDel(a)}
-                className={`${btnIcon} hover:text-danger`}
-                aria-label={`Delete ${a.name}`}
-                title="Delete"
+                onClick={() => onAdd(a)}
+                disabled={!addable(a)}
+                aria-label={`Add ${a.name} to the video`}
+                title={addable(a) ? "Add to the video at the playhead" : "This kind of file can't go in a video"}
+                className="block w-full text-left disabled:cursor-not-allowed"
               >
-                <Trash2 className="w-3.5 h-3.5" />
+                <div className="relative h-20 bg-surface-sunken grid place-items-center overflow-hidden">
+                  {a.content_type.startsWith("image/") ? (
+                    <img src={`/api/uploads/${a.key}`} alt="" className="w-full h-full object-cover" />
+                  ) : a.content_type.startsWith("video/") ? (
+                    <video src={`/api/uploads/${a.key}#t=0.1`} preload="metadata" muted className="w-full h-full object-cover" />
+                  ) : a.content_type.startsWith("audio/") ? (
+                    <Music className="w-6 h-6 text-track-audio" />
+                  ) : (
+                    <Film className="w-6 h-6 text-faint" />
+                  )}
+                  {a.duration ? (
+                    <span className="absolute bottom-1 right-1 rounded-xs bg-surface/90 px-1 text-fine tabular-nums text-foreground">
+                      {fmtSeconds(a.duration)}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="px-2 py-1.5 pr-16 text-body-sm truncate">{a.name}</div>
               </button>
-            </div>
-          </div>
-        ))}
+              <div className="absolute right-1 bottom-0.5 flex items-center">
+                <button onClick={() => copy(a.key)} className={`${btnIcon} ${reveal}`} aria-label={`Copy the path of ${a.name}`} title={`Copy assets/${a.key}`}>
+                  {copied === a.key ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                </button>
+                <button
+                  onClick={() => setConfirmDel(a)}
+                  className={`${btnIcon} ${reveal} hover:text-danger`}
+                  aria-label={`Delete ${a.name}`}
+                  title="Delete"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
       </div>
-
-      {assets.length === 0 && (
-        <EmptyState
-          icon={<Film className="w-8 h-8" />}
-          title="Nothing in the library yet"
-          body="Upload a logo, a product demo or a still, then reference it from your composition HTML."
-        />
-      )}
 
       {confirmDel && (
         <ConfirmDialog
