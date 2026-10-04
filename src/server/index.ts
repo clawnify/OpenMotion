@@ -182,10 +182,14 @@ function captureFailed(c: { json: (b: unknown, s: 400 | 502) => Response }, err:
 
 app.post("/api/demos/outline", async (c) => {
   if (!c.env.CLAWNIFY_TOKEN) return c.json(CAPTURE_OFF, 503);
-  const b = await c.req.json<{ url?: string; page?: { width: number; height: number }; wait_gone?: string; steps?: CaptureStep[] }>().catch(() => null);
+  const b = await c.req
+    .json<{ url?: string; page?: { width: number; height: number }; wait_gone?: string; steps?: CaptureStep[]; allow_writes?: boolean }>()
+    .catch(() => null);
   if (!b?.url) return c.json({ error: "url is required" }, 400);
   try {
-    return c.json(await outlinePage(servicesEnv(c.env), { url: b.url, page: b.page, waitGone: b.wait_gone, steps: b.steps }));
+    return c.json(
+      await outlinePage(servicesEnv(c.env), { url: b.url, page: b.page, waitGone: b.wait_gone, steps: b.steps, allowWrites: b.allow_writes === true }),
+    );
   } catch (err) {
     return captureFailed(c, err);
   }
@@ -206,6 +210,7 @@ const demoSchema = z.object({
   page: sizeSchema.optional(),
   wait_gone: z.string().optional(),
   steps: z.array(z.record(z.unknown())).min(1).max(12).optional(),
+  allow_writes: z.boolean().optional(),
   ...lookSchema,
 });
 type DemoSpec = {
@@ -213,6 +218,7 @@ type DemoSpec = {
   page?: { width: number; height: number };
   wait_gone?: string;
   steps: Record<string, unknown>[];
+  allow_writes?: boolean;
   look?: z.infer<z.ZodObject<typeof lookSchema>>;
 };
 
@@ -233,7 +239,7 @@ app.post("/api/demos", async (c) => {
   const before = existing ? (demoSpecOf(existing.html) as DemoSpec | null) : null;
   const look = { ...before?.look, ...Object.fromEntries(Object.entries(b).filter(([k, v]) => k in lookSchema && v !== undefined)) };
   const spec: DemoSpec | null = b.url && b.steps
-    ? { url: b.url, page: b.page, wait_gone: b.wait_gone, steps: b.steps, look }
+    ? { url: b.url, page: b.page, wait_gone: b.wait_gone, steps: b.steps, allow_writes: b.allow_writes, look }
     : before && { ...before, look };
   if (!spec) return c.json({ error: "url and steps are required, or the composition_id of a demo made here" }, 400);
 
@@ -244,6 +250,7 @@ app.post("/api/demos", async (c) => {
       page: spec.page,
       waitGone: spec.wait_gone,
       steps: spec.steps as CaptureStep[],
+      allowWrites: spec.allow_writes === true,
     });
   } catch (err) {
     return captureFailed(c, err);
@@ -291,8 +298,11 @@ app.post("/api/demos", async (c) => {
       `UPDATE compositions SET name = ?, description = ?, html = ?, updated_at = datetime('now') WHERE id = ?`,
       [b.name ?? existing.name, b.description ?? existing.description, html, id],
     );
-    // The stills of the capture this one replaces.
-    const old = new Set([...existing.html.matchAll(/assets\/(demo-[a-z0-9-]+\.png)/g)].map((m) => m[1]));
+    // The stills of the capture this one replaces: only keys this endpoint
+    // made for this composition (demo-<id8>-<run>-…), never an upload of the
+    // user's that happens to be named demo-something.
+    const ours = new RegExp(`assets/(demo-${id.slice(0, 8)}-[0-9a-f]{6}-[0-9a-z-]+\\.png)`, "g");
+    const old = new Set([...existing.html.matchAll(ours)].map((m) => m[1]));
     for (const key of old) {
       if (html.includes(`assets/${key}`)) continue;
       await run("DELETE FROM assets WHERE key = ?", [key]);

@@ -199,6 +199,14 @@ defaults to the action's length above. The browser is signed out and starts
 fresh each time, so demo and claim workspaces work, and pages behind a login
 do not.
 
+**The page is not changed.** Unless you pass `allow_writes: true`, the
+browser's save requests are blocked: the page changes on screen and nothing is
+stored. Keep that default for any link that is someone's real workspace (a
+claim link opens a prospect's real apps), so the demo leaves nothing behind.
+Pass `allow_writes: true` only for disposable data, such as a public demo
+workspace, and only when a step's result shows up after the server answers
+(the response's `warnings` say how many requests were blocked).
+
 **Never click** anything that commits, buys, sends, deletes, signs in or
 claims (a "Claim this workspace" or "Use this app" button, a checkout, a send
 button): the video should show the product, and some of those act for real.
