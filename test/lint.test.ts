@@ -58,3 +58,11 @@ test("the list is bounded, the counts are not, and no problem hides behind repea
 test("empty HTML has nothing to lint", async () => {
   assert.equal(await lintComposition("  "), null);
 });
+
+test("a product demo's many stills are not reported: the fix (separate files) cannot be made here", async () => {
+  const { screenDemoHtml } = await import("../src/shared/screen-demo.ts");
+  const steps = Array.from({ length: 6 }, (_, i) => ({ src: `assets/s${i}.png`, seconds: 2 }));
+  const lint = await lintComposition(screenDemoHtml({ id: "d", steps }));
+  assert.ok(lint && !lint.findings.some((f) => f.code === "timeline_track_too_dense"), JSON.stringify(lint));
+  assert.equal(lint.warnings, 0);
+});
