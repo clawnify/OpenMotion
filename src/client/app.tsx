@@ -822,6 +822,8 @@ function Editor({
                   src={`/api/compositions/${comp.id}/preview?seek=${poster}`}
                   className="w-full h-full"
                   title="preview"
+                  // Lets the composition's <audio> clips play when the user presses play.
+                  allow="autoplay"
                 />
               </div>
             </Panel>

@@ -655,13 +655,15 @@ function previewDoc(html: string): string {
       });
       // The renderer mounts a clip only inside [data-start, data-start +
       // data-duration), so the preview hides it outside that window too.
-      // Video and audio are never played natively: each frame seeks them to
-      // the playhead, like GSAP, so scrubbing shows the frame the render will.
-      // Muted, because per-frame seeking can't make clean sound; the exported
-      // MP4 carries the real audio.
+      // Video and audio play on their own clock while the preview plays and
+      // are re-seeked only after a real jump (a loop, a scrub), as OpenVideo
+      // does: a seek empties the decoder's buffer, so seeking every frame
+      // stalls them. Paused, they follow the playhead closely, so scrubbing
+      // shows the frame the render will. A <video> is muted, as HyperFrames
+      // renders it; sound comes from an <audio> clip, which plays.
       clips = [].slice.call(document.querySelectorAll('.clip')).map(function (el) {
         var media = el.tagName === 'VIDEO' || el.tagName === 'AUDIO';
-        if (media) { try { el.muted = true; el.pause(); } catch (e) {} }
+        if (media) { try { if (el.tagName === 'VIDEO') el.muted = true; el.pause(); } catch (e) {} }
         return { el: el, media: media, start: parseFloat(el.getAttribute('data-start')) || 0,
                  duration: parseFloat(el.getAttribute('data-duration')) };
       });
@@ -669,6 +671,24 @@ function previewDoc(html: string): string {
       last = performance.now();
       requestAnimationFrame(tick);
     });
+    // One media clip against the playhead: \`at\` is where in the clip it
+    // should be. Playing, drift is tolerated (0.75 s video, 0.25 s audio) and
+    // only a jump re-seeks; paused, it follows within 0.05 s. Past the clip's
+    // end it holds the last frame, as the render does.
+    function syncMedia(el, live, at, natural) {
+      try {
+        if (!live) { if (!el.paused) el.pause(); return; }
+        if (at >= natural) {
+          if (!el.paused) el.pause();
+          if (!el.seeking && Math.abs(el.currentTime - (natural - 0.001)) > 0.05) el.currentTime = natural - 0.001;
+          return;
+        }
+        var drift = playing ? (el.tagName === 'AUDIO' ? 0.25 : 0.75) : 0.05;
+        if (!el.seeking && Math.abs(el.currentTime - at) > drift) el.currentTime = at;
+        if (playing && el.paused) { var started = el.play(); if (started && started.catch) started.catch(function () {}); }
+        if (!playing && !el.paused) el.pause();
+      } catch (e) {}
+    }
     function tick(now) {
       requestAnimationFrame(tick);
       var dt = (now - last) / 1000; last = now;
@@ -684,11 +704,7 @@ function previewDoc(html: string): string {
         var span = isFinite(c.duration) ? c.duration : natural;
         var live = t >= c.start && t < c.start + span;
         if (live !== c.live) { c.live = live; c.el.style.visibility = live ? '' : 'hidden'; }
-        if (live && c.media && isFinite(natural)) {
-          var at = Math.min(t - c.start, Math.max(0, natural - 0.001));
-          // Skip near-identical seeks so playback stays smooth.
-          try { if (Math.abs(c.el.currentTime - at) > 0.03) c.el.currentTime = at; } catch (e) {}
-        }
+        if (c.media) syncMedia(c.el, live && isFinite(natural), t - c.start, natural);
       });
       parent.postMessage({ source: 'hf-preview', type: 'time', t: playhead, duration: duration }, '*');
     }`;
