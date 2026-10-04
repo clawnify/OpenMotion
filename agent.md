@@ -203,8 +203,14 @@ It answers like a create, with `lint`; a bad step answers 400 with `problems`.
 The result is an ordinary composition: one `<img class="clip demo-step">` per
 step, and a script that turns each step's `data-start`, `data-focus` and
 `data-click` into the camera, cursor and click. So moving or trimming a step on
-the timeline moves its motion with it, and you can add titles or captions as
-more clips. Leave that script as it is; change the look around it.
+the timeline moves its motion with it. Leave that script as it is; change the
+look around it.
+
+A rebuild (`composition_id`) regenerates the whole composition from the
+request, so anything added by hand since (a title, a caption, a moved step) is
+replaced. For a demo that will be captured again, put what should survive in
+the request (`background`, `accent`, the steps' `seconds`), and add titles or
+captions only to a demo you will not rebuild.
 
 ## API
 

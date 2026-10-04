@@ -130,6 +130,13 @@ async function find(p: Page, loc: Locator, preferControls: boolean): Promise<{ e
   const pool = preferControls && visible.some((c) => c.control) ? visible.filter((c) => c.control) : visible;
   pool.sort((a, b) => a.box.w * a.box.h - b.box.w * b.box.h);
   if (!pool[0]) throw new Error(`nothing on the page matches ${JSON.stringify(loc)}`);
+  // A click target that several controls match is a guess; say so, so the
+  // spec can be made exact before the guess drifts on a re-capture. (A focus
+  // always matches its ancestors too, and the smallest is the one meant.)
+  const controls = pool.filter((c) => c.control).length;
+  if (preferControls && controls > 1) {
+    console.warn(`  ${JSON.stringify(loc)} matched ${controls} controls; took the smallest. Add a selector to be exact.`);
+  }
   return pool[0];
 }
 
