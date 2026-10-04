@@ -361,7 +361,8 @@ type LayoutId = (typeof LAYOUTS)[number]["id"];
 /** Which layout a demo is in now, read from its HTML. */
 function currentLayout(html: string): LayoutId {
   const area = /<div id="demo-area"[^>]*top:([^;]+);/.exec(html);
-  if (area) return area[1].trim() === "0" ? "top" : "bottom";
+  // "0", "0px" (demos made before splits were percentages) or "50%".
+  if (area) return parseFloat(area[1]) === 0 ? "top" : "bottom";
   if (/<video id="clip"[^>]*\s+style="[^"]*border-radius:50%/.test(html)) return "pip";
   return "full";
 }
