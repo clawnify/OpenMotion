@@ -120,6 +120,92 @@ To list what's available: `GET /api/assets` → `[{ key, name, content_type }]`.
 Use the exact `key` in `assets/<key>`. (Users upload via the Media tab; you can
 also upload programmatically with a multipart `POST /api/assets`.)
 
+Every clip is on screen only inside its window: it appears at `data-start`
+and leaves `data-duration` seconds later. A `<video>` or `<audio>` clip plays
+from its own beginning within that window, and scrubbing seeks it frame for
+frame, so the preview shows the frame the render will. Give a video clip a
+`data-duration` (shorter trims it, longer holds its last frame) so it counts
+toward the composition's length.
+
+## Product demos of a web app (screen-recording style)
+
+When the user asks for a demo, walkthrough or "screen recording" of a web app
+at a link, the video shows that app being used: a cursor glides to a control,
+clicks it, the page changes, and the camera zooms to what matters.
+
+Build it from **stills of the real app, one per state, captured in a real
+browser**, never from an `<iframe>` of the link. The renderer cannot click
+inside an iframe or rewind it, and most apps refuse to be framed at all
+(`frame-ancestors`). A still per state, with the cursor, click and camera
+animated on top by the app, renders the same every time and works for any
+page you can open.
+
+**Plan 3 to 6 steps.** For each: the state the page is in, what to point the
+viewer at (`focus`), and what gets clicked to reach the next state (`click`).
+The last step has no click. Give a step with a click about 3.5 s (at least
+2 s), the last one 2 to 3 s.
+
+**If you can run Node and Chrome, use the capture script** in this repo. Write
+a spec that names elements by what they say, so it still works after the app's
+layout changes:
+
+```json
+{ "name": "Studio: from prompt to outputs",
+  "url": "https://app.clawnify.com/demo/workspaces/studio?at=%2Fworkflows%2F5a1e0000-0000-4000-8000-000000000001",
+  "wait_gone": "Loading",
+  "steps": [
+    { "focus": { "text": "A tidy creative studio desk", "closest": ".react-flow__node" },
+      "click": { "text": "Outputs" }, "seconds": 4 },
+    { "focus": { "text": "sample-output", "closest": "div:has(img)" },
+      "click": { "text": "Workflows" }, "seconds": 3.5 },
+    { "seconds": 2.5 } ] }
+```
+
+```sh
+CHROME_PATH=/path/to/chrome pnpm demo:capture spec.json \
+  --api <this app's API base> --header "Authorization: Bearer …" [--composition <id>]
+```
+
+A locator is `text` (the smallest visible element containing it, in any frame;
+for a click, controls win), `selector`, or both, plus `closest` to grow the
+match to an ancestor such as its card. The script screenshots each state at
+1600×900, scale 2, really clicks, uploads the stills and calls the endpoint
+below. With `--composition` it rebuilds that video in place: run the same
+spec again whenever the app changes.
+
+**Otherwise capture by hand** in your own browser: viewport 1600×900 at device
+scale factor 2; per step, wait until the page settles, take a viewport
+screenshot, record `focus` and `click` as `{x,y,w,h}` page pixels
+(`getBoundingClientRect()`; inside an iframe, add the iframe's own `x`/`y`),
+then really click. Upload each still with a multipart `POST /api/assets`
+(field `file`) and keep the `key` it returns.
+
+**Then build the video** with `POST /api/compositions/screen-demo`:
+
+```json
+{ "name": "Studio: from prompt to outputs",
+  "steps": [
+    { "asset": "studio-1.png", "seconds": 4,
+      "focus": { "x": 615, "y": 253, "w": 300, "h": 180 },
+      "click": { "x": 1316, "y": 55, "w": 70, "h": 28 } },
+    { "asset": "studio-2.png", "seconds": 3.5,
+      "focus": { "x": 551, "y": 109, "w": 247, "h": 331 },
+      "click": { "x": 26, "y": 324, "w": 240, "h": 28 } },
+    { "asset": "studio-3.png", "seconds": 2.5 } ] }
+```
+
+Optional: `composition_id` (rebuild that video instead of creating one),
+`page` (the capture viewport, default 1600×900), `frame` (the video size,
+default 1920×1080; a smaller frame scales the window down), `background` (CSS
+behind the window), `accent` (the click ripple as `r,g,b`, use the brand's).
+It answers like a create, with `lint`; a bad step answers 400 with `problems`.
+
+The result is an ordinary composition: one `<img class="clip demo-step">` per
+step, and a script that turns each step's `data-start`, `data-focus` and
+`data-click` into the camera, cursor and click. So moving or trimming a step on
+the timeline moves its motion with it, and you can add titles or captions as
+more clips. Leave that script as it is; change the look around it.
+
 ## API
 
 | Method | Path | Purpose |
@@ -127,6 +213,7 @@ also upload programmatically with a multipart `POST /api/assets`.)
 | GET  | `/api/compositions` | List compositions |
 | GET  | `/api/compositions/{id}` | Get one (includes `html` and `lint`) |
 | POST | `/api/compositions` | Create `{ name, description?, html?, fps? }` → the row with `lint` |
+| POST | `/api/compositions/screen-demo` | Create or rebuild a product demo from captured stills (see above) |
 | PUT  | `/api/compositions/{id}` | Update any of `name/description/html/fps` → the row with `lint` |
 | DELETE | `/api/compositions/{id}` | Delete |
 | GET  | `/api/assets` | List uploaded media |

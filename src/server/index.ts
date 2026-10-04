@@ -11,6 +11,8 @@ import {
 import { renderComposition } from "./render";
 import { compositionLength, withLength } from "../shared/length";
 import { lintComposition } from "./lint";
+import { z } from "zod";
+import { screenDemoHtml, screenDemoProblems } from "../shared/screen-demo";
 
 type Bindings = {
   DB: D1Database;
@@ -74,6 +76,73 @@ app.post("/api/compositions", async (c) => {
   );
   const row = await get<Composition>("SELECT * FROM compositions WHERE id = ?", [id]);
   return c.json(row && (await withLint(row)), 201);
+});
+
+// A product demo in the style of a screen recording, built from one captured
+// still per state of an app (see shared/screen-demo.ts). Steps name uploaded
+// assets by key. With composition_id it rebuilds that video in place, which is
+// how a demo is refreshed after the app changes and its states are captured
+// again; without it, it creates one.
+const boxSchema = z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() });
+const sizeSchema = z.object({ width: z.number().int().min(16).max(4096), height: z.number().int().min(16).max(4096) });
+const screenDemoSchema = z.object({
+  composition_id: z.string().optional(),
+  name: z.string().trim().min(1).optional(),
+  description: z.string().optional(),
+  steps: z.array(z.object({
+    asset: z.string().min(1),
+    seconds: z.number(),
+    focus: boxSchema.optional(),
+    click: boxSchema.optional(),
+  })).min(1).max(40),
+  page: sizeSchema.optional(),
+  frame: sizeSchema.optional(),
+  background: z.string().max(300).optional(),
+  accent: z.string().optional(),
+});
+
+app.post("/api/compositions/screen-demo", async (c) => {
+  const parsed = screenDemoSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) {
+    return c.json({ error: "invalid screen demo", problems: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) }, 400);
+  }
+  const b = parsed.data;
+  const existing = b.composition_id
+    ? await get<Composition>("SELECT * FROM compositions WHERE id = ?", [b.composition_id])
+    : null;
+  if (b.composition_id && !existing) return c.json({ error: "Not found" }, 404);
+  if (!existing && !b.name) return c.json({ error: "name is required" }, 400);
+
+  const keys = new Set((await query<{ key: string }>("SELECT key FROM assets")).map((a) => a.key));
+  const missing = b.steps.map((s) => s.asset).filter((k) => !keys.has(k));
+  if (missing.length) return c.json({ error: "unknown asset", problems: missing.map((k) => `no asset with key ${k}`) }, 400);
+
+  const id = existing?.id ?? crypto.randomUUID();
+  const opts = {
+    id: `demo-${id.slice(0, 8)}`,
+    steps: b.steps.map((s) => ({ src: `assets/${s.asset}`, seconds: s.seconds, focus: s.focus, click: s.click })),
+    page: b.page,
+    frame: b.frame,
+    background: b.background,
+    accent: b.accent,
+  };
+  const problems = screenDemoProblems(opts);
+  if (problems.length) return c.json({ error: "invalid screen demo", problems }, 400);
+  const html = screenDemoHtml(opts);
+
+  if (existing) {
+    await run(
+      `UPDATE compositions SET name = ?, description = ?, html = ?, updated_at = datetime('now') WHERE id = ?`,
+      [b.name ?? existing.name, b.description ?? existing.description, html, id],
+    );
+  } else {
+    await run(
+      "INSERT INTO compositions (id, name, description, html, fps) VALUES (?, ?, ?, ?, ?)",
+      [id, b.name, b.description ?? "", html, 30],
+    );
+  }
+  const row = await get<Composition>("SELECT * FROM compositions WHERE id = ?", [id]);
+  return c.json(row && (await withLint(row)), existing ? 200 : 201);
 });
 
 app.put("/api/compositions/:id", async (c) => {
@@ -316,7 +385,7 @@ function previewDoc(html: string): string {
     var endParam = parseFloat(params.get('end') || '');
     var seekParam = parseFloat(params.get('seek') || '');
     var loopStart = startAt, loopEnd = isFinite(endParam) ? endParam : Infinity;
-    var tls = [], playhead = startAt, playing = params.get('play') === '1', duration = 5, last = 0;
+    var tls = [], clips = [], playhead = startAt, playing = params.get('play') === '1', duration = 5, last = 0;
     // The render length, worked out on the server by the same rule the render
     // uses (shared/length.ts). null: neither the root nor any clip says, so the
     // timelines decide here exactly as they do in the renderer.
@@ -369,6 +438,18 @@ function previewDoc(html: string): string {
           parent.postMessage({ source: 'hf-preview', type: 'select', index: i }, '*');
         });
       });
+      // The renderer mounts a clip only inside [data-start, data-start +
+      // data-duration), so the preview hides it outside that window too.
+      // Video and audio are never played natively: each frame seeks them to
+      // the playhead, like GSAP, so scrubbing shows the frame the render will.
+      // Muted, because per-frame seeking can't make clean sound; the exported
+      // MP4 carries the real audio.
+      clips = [].slice.call(document.querySelectorAll('.clip')).map(function (el) {
+        var media = el.tagName === 'VIDEO' || el.tagName === 'AUDIO';
+        if (media) { try { el.muted = true; el.pause(); } catch (e) {} }
+        return { el: el, media: media, start: parseFloat(el.getAttribute('data-start')) || 0,
+                 duration: parseFloat(el.getAttribute('data-duration')) };
+      });
       parent.postMessage({ source: 'hf-preview', type: 'meta', duration: duration }, '*');
       last = performance.now();
       requestAnimationFrame(tick);
@@ -378,6 +459,22 @@ function previewDoc(html: string): string {
       var dt = (now - last) / 1000; last = now;
       if (playing) { playhead += dt; if (playhead > loopEnd) playhead = loopStart; }
       tls.forEach(function (tl) { try { tl.time(Math.min(playhead, tl.duration())); } catch (e) {} });
+      // The render's last frame is just before the end, so parking the
+      // playhead at the very end shows that frame, not an empty stage.
+      var t = Math.min(playhead, duration - 0.001);
+      clips.forEach(function (c) {
+        // No data-duration: a media clip runs its own length, anything else
+        // stays to the end.
+        var natural = c.media && isFinite(c.el.duration) ? c.el.duration : Infinity;
+        var span = isFinite(c.duration) ? c.duration : natural;
+        var live = t >= c.start && t < c.start + span;
+        if (live !== c.live) { c.live = live; c.el.style.visibility = live ? '' : 'hidden'; }
+        if (live && c.media && isFinite(natural)) {
+          var at = Math.min(t - c.start, Math.max(0, natural - 0.001));
+          // Skip near-identical seeks so playback stays smooth.
+          try { if (Math.abs(c.el.currentTime - at) > 0.03) c.el.currentTime = at; } catch (e) {}
+        }
+      });
       parent.postMessage({ source: 'hf-preview', type: 'time', t: playhead, duration: duration }, '*');
     }`;
   // Media is referenced as a relative `assets/<key>` path (what the renderer
