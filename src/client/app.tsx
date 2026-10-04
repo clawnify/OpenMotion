@@ -902,7 +902,7 @@ function Editor({
             playing={playing}
             fps={fps}
             selected={selectedClip == null ? null : String(selectedClip)}
-            onSelect={(id) => setSelectedClip(Number(id))}
+            onSelect={(id) => setSelectedClip(id == null ? null : Number(id))}
             onSeek={seek}
             onTogglePlay={togglePlay}
             onChange={onTimelineChange}
