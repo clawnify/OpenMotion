@@ -119,8 +119,27 @@ HTML by path: `assets/<key>`. Reference it as `<img src="assets/logo.png">` or
 the assets your HTML actually references — you don't attach them manually.
 
 To list what's available: `GET /api/assets` → `[{ key, name, content_type }]`.
-Use the exact `key` in `assets/<key>`. (Users upload via the Media tab; you can
-also upload programmatically with a multipart `POST /api/assets`.)
+Use the exact `key` in `assets/<key>`. (Users upload in the Media rail beside
+the preview, and a click on a file adds it to the video at the playhead.)
+
+To upload yourself, send a multipart `POST /api/assets` with the file in the
+field `file`, plus `duration` (seconds) for video and audio. Reference the
+`key` it returns, not the filename you sent: the name is normalized, and a
+taken one gets a suffix.
+
+**An image the user attached in the chat** (a photo, a logo): send it straight
+from the chat with `call_app_api` and `files`, so the bytes never pass through
+you:
+
+```
+call_app_api { app_id, method: "POST", path: "/api/assets",
+               files: [{ field: "file", attachment: 1, filename: "face.jpg" }] }
+```
+
+`attachment` counts the images attached in this chat, newest first (1 = the
+last one). Images only (jpeg, png, webp, gif), up to 5 MB each and 5 per call;
+only the dashboard chat has `files`. A video clip the user wants in the video
+still comes in through the Media rail.
 
 Every clip is on screen only inside its window: it appears at `data-start`
 and leaves `data-duration` seconds later. A `<video>` or `<audio>` clip plays

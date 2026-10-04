@@ -11,6 +11,7 @@ import {
 import { starterHtml } from "./starter";
 import { FORMATS, formatOf, frameOf, ratioLabel, withFrame } from "../shared/format";
 import { applyLayout, type DemoLayout } from "../shared/screen-demo";
+import { insertMedia, mediaKind } from "../shared/insert-media";
 import { Timeline, type TimelineEdit } from "./timeline";
 import { compositionLength } from "../shared/length";
 import type { Lint } from "../server/lint";
@@ -22,7 +23,6 @@ import {
   Plus,
   Upload,
   Trash2,
-  Copy,
   Check,
   Loader2,
   Video,
@@ -116,7 +116,7 @@ const api = {
 
 // ── app ──────────────────────────────────────────────────────────────
 
-type Tab = "compose" | "timeline" | "media";
+type Tab = "compose" | "timeline";
 
 // Minimal history-based router: `/` = gallery, `/<id>` = editor for that id.
 function useRouter() {
@@ -556,7 +556,8 @@ function Editor({
     onlySaveAfterUserInteractions: true,
   });
   const hLayout = useDefaultLayout({
-    id: "ove:editor-h:v2",
+    // v3: the media rail joined this row (v2 saved two panels).
+    id: "ove:editor-h:v3",
     storage: localStorage,
     onlySaveAfterUserInteractions: true,
   });
@@ -852,6 +853,21 @@ function Editor({
 
   const isDemo = /class="clip demo-step"/.test(html);
 
+  /** A file from the Media rail, added at the playhead and selected. One undo step. */
+  async function addMedia(a: Asset) {
+    const kind = mediaKind(a.content_type);
+    if (!kind) return;
+    const seconds = kind === "image" ? 3 : (await clipSeconds(a)) || 3;
+    const r = insertMedia(html, { src: `assets/${a.key}`, kind, seconds, at: time });
+    if (!r) return;
+    if (pendingBefore.current === null) pendingBefore.current = html;
+    setHtml(r.html);
+    persist(r.html, 0);
+    const all = Array.from(new DOMParser().parseFromString(r.html, "text/html").querySelectorAll(".clip"));
+    const index = all.findIndex((el) => el.id === r.id);
+    if (index >= 0) setSelectedClip(index);
+  }
+
   /** Put the demo in a layout, once (shared/screen-demo.ts applyLayout). One undo step. */
   function changeLayout(layout: DemoLayout) {
     const next = applyLayout(html, layout);
@@ -917,7 +933,14 @@ function Editor({
             defaultLayout={hLayout.defaultLayout}
             onLayoutChanged={hLayout.onLayoutChanged}
           >
-            <Panel id="preview" defaultSize="74%" minSize="45%" className="min-w-0 p-5">
+            {/* Media library, as in OpenVideo: click a file to add it at the playhead. */}
+            <Panel id="media" defaultSize="18%" minSize="12%" maxSize="32%" className="min-w-0 bg-surface-sunken border-r border-border">
+              <MediaRail changes={changes} onAdd={addMedia} />
+            </Panel>
+
+            <Separator className="ove-sep-x" />
+
+            <Panel id="preview" defaultSize="58%" minSize="35%" className="min-w-0 p-5">
               {/* Preview stage: the harness scales + centers the composition,
                   letterboxing it inside this black stage (any panel shape). */}
               <div className="h-full w-full min-h-0 min-w-0 bg-black rounded-md overflow-hidden shadow-edge">
@@ -935,7 +958,7 @@ function Editor({
 
             <Separator className="ove-sep-x" />
 
-            <Panel id="inspector" defaultSize="26%" minSize="18%" maxSize="46%" className="bg-surface overflow-y-auto">
+            <Panel id="inspector" defaultSize="24%" minSize="16%" maxSize="46%" className="bg-surface overflow-y-auto">
               {selClip ? (
                 <Inspector
                   key={selClip.index}
@@ -1008,7 +1031,7 @@ function Editor({
           )}
           <div className="px-5 pt-3 shrink-0 flex items-center gap-3">
             <div className="inline-flex items-center gap-0.5 rounded-full bg-surface-sunken p-0.5">
-              {(["timeline", "compose", "media"] as Tab[]).map((t) => (
+              {(["timeline", "compose"] as Tab[]).map((t) => (
                 <button
                   key={t}
                   onClick={() => setTab(t)}
@@ -1079,7 +1102,6 @@ function Editor({
             formatTime={(t) => fmtTC(t, fps)}
           />
         )}
-        {tab === "media" && <MediaPanel changes={changes} />}
           </div>
         </Panel>
       </Group>
@@ -1490,9 +1512,13 @@ function toHex(color: string): string {
 
 // ── media ────────────────────────────────────────────────────────────
 
-function MediaPanel({ changes }: { changes: number }) {
+/**
+ * The Media library as a rail beside the preview, as in OpenVideo: upload or
+ * drop files in, click one to add it to the video at the playhead, delete on
+ * hover. Media is referenced from the HTML as assets/<key>.
+ */
+function MediaRail({ changes, onAdd }: { changes: number; onAdd: (a: Asset) => void }) {
   const [assets, setAssets] = useState<Asset[]>([]);
-  const [copied, setCopied] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [confirmDel, setConfirmDel] = useState<Asset | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -1504,13 +1530,19 @@ function MediaPanel({ changes }: { changes: number }) {
     load();
   }, [changes]);
 
-  async function upload(files: FileList | null) {
-    if (!files?.length) return;
+  async function upload(files: FileList | File[] | null) {
+    const list = Array.from(files ?? []);
+    if (!list.length) return;
     setUploading(true);
     try {
-      for (const f of Array.from(files)) {
+      for (const f of list) {
         const fd = new FormData();
         fd.append("file", f);
+        // Video and audio carry their length, so layouts and clips can use it.
+        if (f.type.startsWith("video/") || f.type.startsWith("audio/")) {
+          const d = await fileSeconds(f);
+          if (d) fd.append("duration", String(d));
+        }
         await fetch("/api/assets", { method: "POST", body: fd });
       }
       await load();
@@ -1524,84 +1556,78 @@ function MediaPanel({ changes }: { changes: number }) {
     load();
   }
 
-  function copy(key: string) {
-    navigator.clipboard.writeText(`assets/${key}`);
-    setCopied(key);
-    setTimeout(() => setCopied(null), 1200);
-  }
-
-  const isImg = (t: string) => t.startsWith("image/");
-
   return (
-    <div className="max-w-3xl space-y-4">
-      <div
+    <div
+      className="h-full overflow-y-auto p-3"
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={(e) => {
+        e.preventDefault();
+        upload(e.dataTransfer.files);
+      }}
+    >
+      <div className="text-label text-muted mb-2">Media</div>
+      <button
         onClick={() => fileRef.current?.click()}
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => {
-          e.preventDefault();
-          upload(e.dataTransfer.files);
-        }}
-        className="flex flex-col items-center gap-2 py-8 rounded-md border-2 border-dashed border-border bg-surface text-muted text-body-sm cursor-pointer hover:border-faint"
+        disabled={uploading}
+        className="w-full h-8 mb-3 rounded-sm border border-dashed border-border text-body-sm text-muted hover:text-foreground hover:border-faint flex items-center justify-center gap-1.5 disabled:opacity-50"
       >
-        {uploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Upload className="w-5 h-5" />}
-        Drop a logo or product demo here, or click to upload
-        <input
-          ref={fileRef}
-          type="file"
-          multiple
-          hidden
-          onChange={(e) => upload(e.target.files)}
-        />
-      </div>
-
-      <p className="text-fine text-muted">
-        Reference media in your composition HTML by its path, e.g.{" "}
-        <code className="px-1 py-0.5 bg-surface-sunken rounded-xs">&lt;img src="assets/logo.png"&gt;</code>. Only
-        referenced assets are shipped to the renderer.
-      </p>
-
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />} Upload
+      </button>
+      <input
+        ref={fileRef}
+        type="file"
+        multiple
+        hidden
+        accept="image/*,video/*,audio/*"
+        onChange={(e) => {
+          const files = Array.from(e.target.files ?? []);
+          // Reset so picking the same file again still uploads it.
+          e.target.value = "";
+          upload(files);
+        }}
+      />
+      <div className="space-y-2">
         {assets.map((a) => (
-          <div key={a.id} className={`${card} overflow-hidden`}>
-            <div className="aspect-video bg-surface-sunken grid place-items-center overflow-hidden">
-              {isImg(a.content_type) ? (
-                <img src={`/api/uploads/${a.key}`} alt={a.name} className="w-full h-full object-contain" />
+          <div key={a.id} className="relative group/tile">
+            <button
+              onClick={() => onAdd(a)}
+              disabled={!mediaKind(a.content_type)}
+              title="Add to the video at the playhead"
+              aria-label={`Add ${a.name} to the video`}
+              className="block w-full text-left rounded-sm bg-surface shadow-edge overflow-hidden hover:bg-surface-sunken group"
+            >
+              {a.content_type.startsWith("image/") ? (
+                <img src={`/api/uploads/${a.key}`} alt="" className="w-full h-20 object-cover bg-black" />
               ) : a.content_type.startsWith("video/") ? (
-                <video src={`/api/uploads/${a.key}`} className="w-full h-full object-cover" muted />
+                <video src={`/api/uploads/${a.key}`} muted preload="metadata" className="w-full h-20 object-cover bg-black" />
               ) : (
-                <Film className="w-6 h-6 text-faint" />
+                <div className="w-full h-12 grid place-items-center bg-surface-sunken">
+                  {a.content_type.startsWith("audio/") ? <Music className="w-5 h-5 text-muted" /> : <Film className="w-5 h-5 text-faint" />}
+                </div>
               )}
-            </div>
-            <div className="p-2 flex items-center gap-1">
-              <code className="flex-1 text-fine truncate text-muted">assets/{a.key}</code>
-              <button onClick={() => copy(a.key)} className={btnIcon} aria-label={`Copy path for ${a.name}`} title="Copy path">
-                {copied === a.key ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-              </button>
-              <button
-                onClick={() => setConfirmDel(a)}
-                className={`${btnIcon} hover:text-danger`}
-                aria-label={`Delete ${a.name}`}
-                title="Delete"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
+              <div className="pl-2 pr-8 py-1.5 text-fine truncate text-muted group-hover:text-foreground">{a.name}</div>
+            </button>
+            <button
+              onClick={() => setConfirmDel(a)}
+              data-hover-only
+              className="absolute right-1 bottom-0.5 grid place-items-center w-6 h-6 rounded-xs text-faint hover:text-danger opacity-0 transition-opacity group-hover/tile:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+              aria-label={`Delete ${a.name}`}
+              title="Delete"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
           </div>
         ))}
+        {assets.length === 0 && (
+          <p className="text-fine text-muted py-4 text-center">
+            No media yet. Upload a logo, a screenshot or a clip, then click it to put it in the video.
+          </p>
+        )}
       </div>
-
-      {assets.length === 0 && (
-        <EmptyState
-          icon={<Film className="w-8 h-8" />}
-          title="Nothing in the library yet"
-          body="Upload a logo, a product demo or a still, then reference it from your composition HTML."
-        />
-      )}
-
       {confirmDel && (
         <ConfirmDialog
           title={`Delete “${confirmDel.name}”?`}
-          body="Any composition that references this file will render without it."
+          body="Videos that use it will show nothing in its place."
           onConfirm={() => {
             del(confirmDel.id);
             setConfirmDel(null);
@@ -1611,6 +1637,24 @@ function MediaPanel({ changes }: { changes: number }) {
       )}
     </div>
   );
+}
+
+/** A local file's length in seconds, read from its metadata, or 0. */
+function fileSeconds(f: File): Promise<number> {
+  return new Promise((done) => {
+    const url = URL.createObjectURL(f);
+    const el = document.createElement(f.type.startsWith("audio/") ? "audio" : "video");
+    el.preload = "metadata";
+    el.onloadedmetadata = () => {
+      URL.revokeObjectURL(url);
+      done(Number.isFinite(el.duration) ? el.duration : 0);
+    };
+    el.onerror = () => {
+      URL.revokeObjectURL(url);
+      done(0);
+    };
+    el.src = url;
+  });
 }
 
 // ── lint ─────────────────────────────────────────────────────────────
