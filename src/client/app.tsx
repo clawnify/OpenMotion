@@ -1611,6 +1611,17 @@ function MediaSidebar({ changes, onAdd }: { changes: number; onAdd: (a: Asset) =
     load();
   }
 
+  /** Added at its real length: one stored without it (an older upload) is
+   *  measured now and the library keeps the answer, as OpenVideo heals them. */
+  async function add(a: Asset) {
+    if (a.duration || !/^(video|audio)\//.test(a.content_type)) return onAdd(a);
+    const seconds = await Promise.race([clipSeconds(a), new Promise<number>((done) => setTimeout(() => done(0), 5000))]);
+    if (!seconds) return onAdd(a);
+    const row = await api.send<Asset>("PATCH", `/api/assets/${a.id}`, { duration: seconds });
+    setAssets((all) => all?.map((x) => (x.id === row.id ? row : x)) ?? all);
+    onAdd(row);
+  }
+
   function copy(key: string) {
     navigator.clipboard.writeText(`assets/${key}`);
     setCopied(key);
@@ -1669,7 +1680,7 @@ function MediaSidebar({ changes, onAdd }: { changes: number; onAdd: (a: Asset) =
           {assets?.map((a) => (
             <li key={a.id} className={`${card} group relative overflow-hidden`}>
               <button
-                onClick={() => onAdd(a)}
+                onClick={() => add(a)}
                 disabled={!addable(a)}
                 aria-label={`Add ${a.name} to the video`}
                 title={addable(a) ? "Add to the video at the playhead" : "This kind of file can't go in a video"}
