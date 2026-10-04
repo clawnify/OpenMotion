@@ -3,7 +3,7 @@
 // has its own start, so it lands at the playhead instead.
 //
 // The markup follows the house convention (agent.md, screen-demo layouts): a
-// visual fills the frame, and a video plays muted with its sound on a separate
+// video fills the frame and plays muted with its sound on a separate
 // <audio>, since HyperFrames renders a video's picture but not its sound.
 // `data-track-index` is only the timeline lane (the render never reads it);
 // what is on top is DOM order, so the caller appends the new clip last.
@@ -76,7 +76,11 @@ export function mediaHtml(kind: MediaKind, src: string, id: string, p: Placement
   }
   const fill = "position:absolute;inset:0;width:100%;height:100%";
   if (kind === "image") {
-    return `<img id="${id}" src="${s}" class="clip" ${at} data-track-index="${p.track}" alt="" style="${fill};object-fit:contain">`;
+    // A still is usually a logo or a photo, not a backdrop: centred at its own
+    // size, at most 60% of the frame. Centred by inset + auto margins, not a
+    // transform, which the first GSAP tween on it would overwrite.
+    const centred = "position:absolute;inset:0;margin:auto;max-width:60%;max-height:60%";
+    return `<img id="${id}" src="${s}" class="clip" ${at} data-track-index="${p.track}" alt="" style="${centred}">`;
   }
   return (
     `<video id="${id}" src="${s}" class="clip" ${at} data-track-index="${p.track}" muted playsinline style="${fill};object-fit:cover"></video>\n` +

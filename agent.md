@@ -140,10 +140,10 @@ WebP, GIF, 5 MB each, up to 5 per call). A video or a sound has to be uploaded
 by the user in the editor's Media sidebar.
 
 Users upload in the editor's **Media** sidebar and click an item to put it in
-the video at the playhead. That adds a clip filling the frame, on new lanes
-above the others, drawn on top, with an id `media-<key>`: an `<img>` (3 s), or a
-muted `<video>` plus an `<audio>` of the same file one lane up (the video's own
-length). When the user then asks to place it ("my face at the bottom", "logo in
+the video at the playhead. That adds a clip on new lanes above the others,
+drawn on top, with an id `media-<key>`: an `<img>` centred at up to 60% of the
+frame (3 s), or a muted `<video>` filling the frame plus an `<audio>` of the
+same file one lane up (the video's own length). When the user then asks to place it ("my face at the bottom", "logo in
 the corner"), restyle that element; don't add a second copy.
 
 Every clip is on screen only inside its window: it appears at `data-start`

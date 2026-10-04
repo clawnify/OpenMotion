@@ -47,9 +47,10 @@ test("a video brings its sound one lane up, muted picture plus an <audio>", () =
   assert.match(html, /<audio id="media-demo-audio" src="assets\/demo.mp4" class="clip" data-start="1" data-duration="4" data-track-index="4"/);
 });
 
-test("an image fills the frame without cropping", () => {
+test("an image sits centred at up to 60% of the frame, with no transform for a tween to undo", () => {
   const html = mediaHtml("image", "assets/face.jpg", "media-face", { start: 0, duration: 3, track: 0 });
-  assert.match(html, /^<img id="media-face" [^>]*object-fit:contain">$/);
+  assert.match(html, /^<img id="media-face" [^>]*style="position:absolute;inset:0;margin:auto;max-width:60%;max-height:60%">$/);
+  assert.doesNotMatch(html, /transform/);
 });
 
 test("quotes in a source cannot break out of the attribute", () => {
