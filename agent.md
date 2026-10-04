@@ -212,9 +212,28 @@ claims (a "Claim this workspace" or "Use this app" button, a checkout, a send
 button): the video should show the product, and some of those act for real.
 
 **Refresh a demo** after the app changed: `POST /api/demos { composition_id }`
-captures it again from the steps it was made with (they are kept inside the
-composition) and replaces its stills. Add `floating`, `tilt` or `accent` to
-change the look at the same time.
+captures it again from the steps it was made with (kept inside the
+composition) and swaps in the new stills, and nothing else: its layout, clip,
+titles, look and timing stay as they are. With as many steps as before, each
+keeps its start and length; with a different number they run on from the
+first one's start.
+
+**Layouts are shortcuts.** For a new demo, `layout` builds a common shape in
+one go, so you don't hand-write it:
+
+- `{ "kind": "split", "demo": "top", "clip": "<video asset key>" }`: the demo
+  in the top half, the clip (a talking head) in the bottom half; `"demo":
+  "bottom"` swaps them. Use with `fit: "cover"` to fill each half.
+- `{ "kind": "pip", "clip": "<video asset key>", "corner": "bottom-right" }`:
+  the demo full frame, the clip in a round bubble.
+- Optional `position` (`"50% 40%"`) moves the clip's crop, e.g. to keep a face
+  in frame.
+
+The clip plays muted with its sound on a separate `<audio>` (HyperFrames'
+rule), for its own length, and unless the steps carry `seconds` they are spread
+over that length. After it is made, the composition is ordinary HTML: move or
+resize anything, and nothing snaps back. Layout and look options sent with a
+`composition_id` are ignored (the response says so).
 
 **Already have stills?** (taken by hand: viewport 1600×900 at scale 2, boxes as
 `{x,y,w,h}` page pixels.) Upload each with a multipart `POST /api/assets`
@@ -237,7 +256,8 @@ change the look at the same time.
 A step's action is one of `click: box`, `drag: { from: box, to: box }`,
 `connect: { from: box, to: box }` or `type: { box, frames: [asset keys] }`.
 
-Optional: `composition_id` (rebuild that video instead of creating one),
+Optional: `composition_id` (swap these stills into that video, keeping its
+layout and everything else),
 `page` (the capture viewport, default 1600×900), `frame` (the video size,
 default 1920×1080), `accent` (the click ripple and connection line as `r,g,b`,
 use the brand's). By default the app fills the video edge to edge, with

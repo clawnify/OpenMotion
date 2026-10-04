@@ -1,7 +1,7 @@
 // Run: pnpm test (Node 22+, no dependencies).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { screenDemoHtml, screenDemoProblems, typingWindow, defaultSeconds, demoSpecOf, fitSeconds, type ScreenDemoOptions } from "../src/shared/screen-demo.ts";
+import { screenDemoHtml, screenDemoProblems, typingWindow, defaultSeconds, demoSpecOf, fitSeconds, replaceDemoSteps, demoStepTimes, withDemoSpec, type ScreenDemoOptions } from "../src/shared/screen-demo.ts";
 import { compositionLength } from "../src/shared/length.ts";
 
 const demo: ScreenDemoOptions = {
@@ -194,4 +194,43 @@ test("a layout with a bad clip or position is named", () => {
     screenDemoProblems({ ...demo, layout: { kind: "split", demo: "top", clip: 'x"y', seconds: 0, position: "middle" } }),
     ["layout.clip: an assets/<key> path", "layout.seconds: above 0", 'layout.position: like "50% 40%"'],
   );
+});
+
+const page = { width: 1600, height: 900 };
+const split = (): string => {
+  const html = screenDemoHtml({ ...demo, frame: { width: 1080, height: 1920 }, layout: { kind: "split", demo: "top", clip: "assets/talk.mp4", seconds: 7.5 } });
+  // The user's own additions after the template: a title clip.
+  return html.replace(/(<!-- \/layout-clip -->\n)/, '$1  <h1 id="title" class="clip" data-start="0" data-duration="3" data-track-index="4">Hi</h1>\n');
+};
+
+test("a refresh swaps the stills and keeps the layout, the clip, added clips and the timing", () => {
+  const before = split().replace('id="step2" src="assets/b.png" class="clip demo-step" data-start="4" data-duration="3.5"', 'id="step2" src="assets/b.png" class="clip demo-step" data-start="5" data-duration="2"');
+  const fresh = demo.steps.map((st, i) => ({ ...st, src: `assets/new-${i + 1}.png`, seconds: 9 }));
+  const after = replaceDemoSteps(before, fresh, page)!;
+  assert.match(after, /src="assets\/new-1.png"/);
+  assert.doesNotMatch(after, /src="assets\/a.png"/);
+  assert.deepEqual(demoStepTimes(after), [{ start: 0, seconds: 4 }, { start: 5, seconds: 2 }, { start: 7.5, seconds: 2.5 }]);
+  for (const kept of ['id="demo-area"', 'id="clip"', 'id="clip-audio"', 'id="title"', "data-width=\"1080\""]) assert.ok(after.includes(kept), kept);
+});
+
+test("a refresh with a different number of steps runs them on from the first start, and grows the video if needed", () => {
+  const before = screenDemoHtml(demo);
+  const fresh = [1, 2, 3, 4].map((n) => ({ src: `assets/n${n}.png`, seconds: 4 }));
+  const after = replaceDemoSteps(before, fresh, page)!;
+  assert.deepEqual(demoStepTimes(after).map((x) => x.start), [0, 4, 8, 12]);
+  assert.match(after, /data-composition-id="demo-1" data-start="0" data-duration="16"/);
+});
+
+test("demos made before the markers are refreshed too", () => {
+  const legacy = screenDemoHtml(demo).replace("      <!-- demo-steps -->\n", "").replace("\n      <!-- /demo-steps -->", "");
+  const after = replaceDemoSteps(legacy, demo.steps.map((st) => ({ ...st, src: "assets/z.png" })), page)!;
+  assert.equal((after.match(/src="assets\/z.png"/g) ?? []).length, 3);
+  assert.equal((after.match(/id="ripple"/g) ?? []).length, 1);
+  assert.equal(replaceDemoSteps("<div>no demo</div>", demo.steps, page), null);
+});
+
+test("the spec is replaced, or added to a composition without one", () => {
+  const withSpec = screenDemoHtml({ ...demo, spec: { url: "https://a.example" } });
+  assert.deepEqual(demoSpecOf(withDemoSpec(withSpec, { url: "https://b.example" })), { url: "https://b.example" });
+  assert.deepEqual(demoSpecOf(withDemoSpec(screenDemoHtml(demo), { url: "https://c.example" })), { url: "https://c.example" });
 });

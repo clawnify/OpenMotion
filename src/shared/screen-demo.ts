@@ -183,6 +183,13 @@ export function defaultSeconds(step: { click?: unknown; drag?: unknown; connect?
 
 const SPEC_TAG = /<script type="application\/json" id="demo-spec">([\s\S]*?)<\/script>/;
 
+/** The composition with its carried capture spec replaced (or added before the GSAP script). */
+export function withDemoSpec(html: string, spec: unknown): string {
+  const tag = `<script type="application/json" id="demo-spec">${JSON.stringify(spec).replace(/</g, "\\u003c")}</script>`;
+  if (SPEC_TAG.test(html)) return html.replace(SPEC_TAG, () => tag);
+  return html.replace(/( *)<script src="https:\/\/cdn\.jsdelivr\.net\/npm\/gsap/, (m, indent) => `${indent}${tag}\n${m}`);
+}
+
 /** The capture spec a demo composition carries, or null. */
 export function demoSpecOf(html: string): unknown {
   const m = SPEC_TAG.exec(html);
@@ -211,9 +218,76 @@ export function screenDemoHtml(opts: ScreenDemoOptions): string {
     : "";
   const fill = `position:absolute;left:0;top:0;width:${pw}px;height:${ph}px`;
 
-  let t = 0;
+  const steps = stepsHtml(opts.steps, { width: pw, height: ph });
+  let t = steps.end;
+
+  // The layout: the area the demo fills (the kit fits it to #cam's parent)
+  // and the clip that goes with it, video muted with its sound on <audio>.
+  const layout = opts.layout ?? { kind: "full" as const };
+  let open = "", close = "", clip = "";
+  if (layout.kind !== "full") {
+    const length = Math.max(t, layout.seconds);
+    t = length;
+    const at = `data-start="0" data-duration="${round(layout.seconds)}"`;
+    const pos = `object-fit:cover;object-position:${layout.position ?? "50% 45%"}`;
+    let box: string;
+    if (layout.kind === "split") {
+      const half = Math.round(fh / 2);
+      const demoTop = layout.demo === "top" ? 0 : fh - half;
+      const clipTop = layout.demo === "top" ? half : 0;
+      open = `  <div id="demo-area" style="position:absolute;left:0;top:${demoTop}px;width:${fw}px;height:${half}px;overflow:hidden">\n`;
+      close = `  </div><!-- /demo-area -->\n`;
+      box = `left:0;top:${clipTop}px;width:${fw}px;height:${fh - half}px`;
+    } else {
+      const d = Math.round(Math.min(fw, fh) * 0.3), m = Math.round(Math.min(fw, fh) * 0.04);
+      const [v, h] = (layout.corner ?? "bottom-right").split("-");
+      box = `${h}:${m}px;${v}:${m}px;width:${d}px;height:${d}px;border-radius:50%;border:6px solid #fff;box-shadow:0 12px 40px rgba(0,0,0,.35);z-index:5`;
+    }
+    clip =
+      `  <!-- layout-clip -->\n` +
+      `  <video id="clip" src="${esc(layout.clip)}" class="clip" ${at} data-track-index="2" muted playsinline\n` +
+      `         style="position:absolute;${box};${pos}"></video>\n` +
+      `  <audio id="clip-audio" src="${esc(layout.clip)}" class="clip" ${at} data-track-index="3" data-volume="1"></audio>\n` +
+      `  <!-- /layout-clip -->\n`;
+  }
+
+  return `<div id="root" data-composition-id="${opts.id}" data-start="0" data-duration="${round(t)}" data-width="${fw}" data-height="${fh}"
+     style="width:${fw}px;height:${fh}px;position:relative;overflow:hidden;background:${esc(bg)}">
+${open}  <div id="cam" style="position:absolute;left:0;top:0;width:100%;height:100%;transform-origin:0 0">
+    <div id="frame" style="position:absolute;overflow:hidden;background:#fff;${windowLook}">
+    <div id="win" data-page-width="${pw}" data-page-height="${ph}" data-accent="${accent}"${opts.floating ? ` data-floating="1"` : ""}${opts.fit === "cover" ? ` data-fit="cover"` : ""}${opts.tilt ? ` data-tilt="1"` : ""}
+         style="position:absolute;left:0;top:0;width:${pw}px;height:${ph}px;transform-origin:0 0">
+${steps.html}
+      <div id="ripple" style="position:absolute;left:0;top:0;width:56px;height:56px;margin:-28px 0 0 -28px;border-radius:50%;background:rgba(${accent},.35);border:2px solid rgba(${accent},.8);opacity:0"></div>
+      <svg id="cursor" width="30" height="30" viewBox="0 0 24 24" style="position:absolute;left:0;top:0;overflow:visible;filter:drop-shadow(0 2px 3px rgba(0,0,0,.35))">
+        <path d="M3 2l15 9.5-6.6 1.3L8 19.6z" fill="#111" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    </div>
+  </div>
+${close}${clip}${opts.spec === undefined ? "" : `  <script type="application/json" id="demo-spec">${JSON.stringify(opts.spec).replace(/</g, "\\u003c")}</script>\n`}  <script src="https://cdn.jsdelivr.net/npm/gsap@3/dist/gsap.min.js"></script>
+  <script>
+${KIT}
+  </script>
+</div>`;
+}
+
+const STEPS_OPEN = "      <!-- demo-steps -->";
+const STEPS_CLOSE = "      <!-- /demo-steps -->";
+
+/**
+ * The demo's stills as clips, from `startAt`, between markers a refresh
+ * replaces (see replaceDemoSteps). Typing stills are clips over their step.
+ */
+export function stepsHtml(
+  steps: ScreenDemoStep[],
+  page: { width: number; height: number },
+  startAt = 0,
+): { html: string; end: number } {
+  const fill = `position:absolute;left:0;top:0;width:${page.width}px;height:${page.height}px`;
+  let t = startAt;
   const imgs: string[] = [];
-  opts.steps.forEach((s, i) => {
+  steps.forEach((s, i) => {
     const attrs = [
       `id="step${i + 1}"`,
       `src="${esc(s.src)}"`,
@@ -243,54 +317,57 @@ export function screenDemoHtml(opts: ScreenDemoOptions): string {
     }
     t += s.seconds;
   });
+  return { html: [STEPS_OPEN, ...imgs, STEPS_CLOSE].join("\n"), end: t };
+}
 
-  // The layout: the area the demo fills (the kit fits it to #cam's parent)
-  // and the clip that goes with it, video muted with its sound on <audio>.
-  const layout = opts.layout ?? { kind: "full" as const };
-  let open = "", close = "", clip = "";
-  if (layout.kind !== "full") {
-    const length = Math.max(t, layout.seconds);
-    t = length;
-    const at = `data-start="0" data-duration="${round(layout.seconds)}"`;
-    const pos = `object-fit:cover;object-position:${layout.position ?? "50% 45%"}`;
-    let box: string;
-    if (layout.kind === "split") {
-      const half = Math.round(fh / 2);
-      const demoTop = layout.demo === "top" ? 0 : fh - half;
-      const clipTop = layout.demo === "top" ? half : 0;
-      open = `  <div id="demo-area" style="position:absolute;left:0;top:${demoTop}px;width:${fw}px;height:${half}px;overflow:hidden">\n`;
-      close = `  </div>\n`;
-      box = `left:0;top:${clipTop}px;width:${fw}px;height:${fh - half}px`;
-    } else {
-      const d = Math.round(Math.min(fw, fh) * 0.3), m = Math.round(Math.min(fw, fh) * 0.04);
-      const [v, h] = (layout.corner ?? "bottom-right").split("-");
-      box = `${h}:${m}px;${v}:${m}px;width:${d}px;height:${d}px;border-radius:50%;border:6px solid #fff;box-shadow:0 12px 40px rgba(0,0,0,.35);z-index:5`;
-    }
-    clip =
-      `  <video id="clip" src="${esc(layout.clip)}" class="clip" ${at} data-track-index="2" muted playsinline\n` +
-      `         style="position:absolute;${box};${pos}"></video>\n` +
-      `  <audio id="clip-audio" src="${esc(layout.clip)}" class="clip" ${at} data-track-index="3" data-volume="1"></audio>\n`;
+/** Where the stills sit in a demo's HTML, with or without markers (demos made before them). */
+function stepsSpan(html: string): { from: number; to: number } | null {
+  const open = html.indexOf(STEPS_OPEN), close = html.indexOf(STEPS_CLOSE);
+  if (open >= 0 && close > open) return { from: open, to: close + STEPS_CLOSE.length };
+  const first = /^ *<img id="step1"/m.exec(html);
+  const ripple = /^ *<div id="ripple"/m.exec(html);
+  if (!first || !ripple || ripple.index < first.index) return null;
+  return { from: first.index, to: ripple.index - 1 };
+}
+
+/** When each still is on screen now, in order, as the user may have retimed them. */
+export function demoStepTimes(html: string): { start: number; seconds: number }[] {
+  return [...html.matchAll(/<img id="step\d+"[^>]*class="clip demo-step"[^>]*>/g)].map((m) => ({
+    start: Number(/data-start="([\d.]+)"/.exec(m[0])?.[1] ?? 0),
+    seconds: Number(/data-duration="([\d.]+)"/.exec(m[0])?.[1] ?? 0),
+  }));
+}
+
+/**
+ * The demo with new stills (a refresh), and nothing else changed: its layout,
+ * clips, titles and look stay as they are. With as many steps as before, each
+ * keeps the start and length it has now; otherwise the new steps run on from
+ * where the first one starts. The video grows if the steps now end later.
+ * Null when the HTML holds no demo stills.
+ */
+export function replaceDemoSteps(html: string, steps: ScreenDemoStep[], page: { width: number; height: number }): string | null {
+  const span = stepsSpan(html);
+  if (!span) return null;
+  const times = demoStepTimes(html);
+  const same = times.length === steps.length;
+  let block: string, end: number;
+  if (same) {
+    // Each step at its own start: render one by one so retimed gaps survive.
+    const parts = steps.map((s, i) => stepsHtml([{ ...s, seconds: times[i].seconds }], page, times[i].start));
+    const inner = parts.map((p, i) =>
+      p.html.split("\n").slice(1, -1).join("\n").replace(/id="step1(-typed\d+)?"/g, (_m, typed) => `id="step${i + 1}${typed ?? ""}"`),
+    );
+    block = [STEPS_OPEN, ...inner, STEPS_CLOSE].join("\n");
+    end = Math.max(...parts.map((p) => p.end));
+  } else {
+    const r = stepsHtml(steps, page, times[0]?.start ?? 0);
+    block = r.html;
+    end = r.end;
   }
-
-  return `<div id="root" data-composition-id="${opts.id}" data-start="0" data-duration="${round(t)}" data-width="${fw}" data-height="${fh}"
-     style="width:${fw}px;height:${fh}px;position:relative;overflow:hidden;background:${esc(bg)}">
-${open}  <div id="cam" style="position:absolute;left:0;top:0;width:100%;height:100%;transform-origin:0 0">
-    <div id="frame" style="position:absolute;overflow:hidden;background:#fff;${windowLook}">
-    <div id="win" data-page-width="${pw}" data-page-height="${ph}" data-accent="${accent}"${opts.floating ? ` data-floating="1"` : ""}${opts.fit === "cover" ? ` data-fit="cover"` : ""}${opts.tilt ? ` data-tilt="1"` : ""}
-         style="position:absolute;left:0;top:0;width:${pw}px;height:${ph}px;transform-origin:0 0">
-${imgs.join("\n")}
-      <div id="ripple" style="position:absolute;left:0;top:0;width:56px;height:56px;margin:-28px 0 0 -28px;border-radius:50%;background:rgba(${accent},.35);border:2px solid rgba(${accent},.8);opacity:0"></div>
-      <svg id="cursor" width="30" height="30" viewBox="0 0 24 24" style="position:absolute;left:0;top:0;overflow:visible;filter:drop-shadow(0 2px 3px rgba(0,0,0,.35))">
-        <path d="M3 2l15 9.5-6.6 1.3L8 19.6z" fill="#111" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/>
-      </svg>
-    </div>
-    </div>
-  </div>
-${close}${clip}${opts.spec === undefined ? "" : `  <script type="application/json" id="demo-spec">${JSON.stringify(opts.spec).replace(/</g, "\\u003c")}</script>\n`}  <script src="https://cdn.jsdelivr.net/npm/gsap@3/dist/gsap.min.js"></script>
-  <script>
-${KIT}
-  </script>
-</div>`;
+  let out = html.slice(0, span.from) + block + html.slice(span.to);
+  const root = /(<[^>]*data-composition-id[^>]*data-duration=")([\d.]+)(")/.exec(out);
+  if (root && Number(root[2]) < end) out = out.replace(root[0], `${root[1]}${round(end)}${root[3]}`);
+  return out;
 }
 
 // The kit. Plain ES5 in a string: it runs in the preview and the renderer,

@@ -12,7 +12,7 @@ import { renderComposition } from "./render";
 import { compositionLength, withLength } from "../shared/length";
 import { lintComposition } from "./lint";
 import { z } from "zod";
-import { type ScreenDemoOptions, screenDemoHtml, screenDemoProblems, defaultSeconds, demoSpecOf, fitSeconds, minimumSeconds } from "../shared/screen-demo";
+import { type ScreenDemoOptions, screenDemoHtml, screenDemoProblems, defaultSeconds, demoSpecOf, fitSeconds, minimumSeconds, replaceDemoSteps, withDemoSpec } from "../shared/screen-demo";
 import { capturePage, outlinePage, ClawnifyServicesError, type CaptureStep, type CapturedPage } from "@clawnify/services";
 
 type Bindings = {
@@ -81,9 +81,9 @@ app.post("/api/compositions", async (c) => {
 
 // A product demo in the style of a screen recording, built from one captured
 // still per state of an app (see shared/screen-demo.ts). Steps name uploaded
-// assets by key. With composition_id it rebuilds that video in place, which is
-// how a demo is refreshed after the app changes and its states are captured
-// again; without it, it creates one.
+// assets by key. With composition_id the stills are swapped into that video
+// and the rest of it (layout, clips, look) is left as it is; without it, a
+// new one is made.
 const boxSchema = z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() });
 const sizeSchema = z.object({ width: z.number().int().min(16).max(4096), height: z.number().int().min(16).max(4096) });
 const screenDemoSchema = z.object({
@@ -146,7 +146,10 @@ app.post("/api/compositions/screen-demo", async (c) => {
   };
   const problems = screenDemoProblems(opts);
   if (problems.length) return c.json({ error: "invalid screen demo", problems }, 400);
-  const html = screenDemoHtml(opts);
+  // Into an existing composition, only its stills change (as a refresh does).
+  const replaced = existing ? replaceDemoSteps(existing.html, opts.steps, opts.page ?? { width: 1600, height: 900 }) : null;
+  if (existing && !replaced) return c.json({ error: "this composition has no demo stills to replace" }, 400);
+  const html = replaced ?? screenDemoHtml(opts);
 
   if (existing) {
     await run(
@@ -232,13 +235,15 @@ const demoSchema = z.object({
   allow_writes: z.boolean().optional(),
   ...lookSchema,
 });
+// What a demo keeps to be captured again: the walk, never the look. Layout
+// and look options shape a new demo once; after that the composition is the
+// user's, and a refresh changes its stills only.
 type DemoSpec = {
   url: string;
   page?: { width: number; height: number };
   wait_gone?: string;
   steps: Record<string, unknown>[];
   allow_writes?: boolean;
-  look?: z.infer<z.ZodObject<typeof lookSchema>>;
 };
 
 app.post("/api/demos", async (c) => {
@@ -256,11 +261,17 @@ app.post("/api/demos", async (c) => {
 
   // A new spec, or the one this demo was made from (a re-capture).
   const before = existing ? (demoSpecOf(existing.html) as DemoSpec | null) : null;
-  const look = { ...before?.look, ...Object.fromEntries(Object.entries(b).filter(([k, v]) => k in lookSchema && v !== undefined)) };
   const spec: DemoSpec | null = b.url && b.steps
-    ? { url: b.url, page: b.page, wait_gone: b.wait_gone, steps: b.steps, allow_writes: b.allow_writes, look }
-    : before && { ...before, look };
+    ? { url: b.url, page: b.page, wait_gone: b.wait_gone, steps: b.steps, allow_writes: b.allow_writes }
+    : before && { url: before.url, page: before.page, wait_gone: before.wait_gone, steps: before.steps, allow_writes: before.allow_writes };
   if (!spec) return c.json({ error: "url and steps are required, or the composition_id of a demo made here" }, 400);
+  const look: z.infer<z.ZodObject<typeof lookSchema>> = Object.fromEntries(
+    Object.entries(b).filter(([k, v]) => k in lookSchema && v !== undefined),
+  );
+  const notes: string[] = [];
+  if (existing && Object.keys(look).length) {
+    notes.push("Layout and look options shape a new demo only; this one kept its own. Change them in the editor.");
+  }
 
   let captured: CapturedPage;
   try {
@@ -307,10 +318,10 @@ app.post("/api/demos", async (c) => {
     return captureFailed(c, err);
   }
 
-  // A layout's clip: an uploaded video, played for its own length, and the
-  // steps spread over that length unless the spec timed them itself.
+  // A layout's clip (new demos only): an uploaded video, played for its own
+  // length, and the steps spread over it unless the spec timed them itself.
   let layout: ScreenDemoOptions["layout"] = undefined;
-  const l = look.layout;
+  const l = existing ? undefined : look.layout;
   if (l && l.kind !== "full") {
     const asset = await get<Asset & { duration: number | null }>("SELECT * FROM assets WHERE key = ?", [l.clip]);
     if (!asset || !asset.content_type.startsWith("video/")) {
@@ -330,7 +341,15 @@ app.post("/api/demos", async (c) => {
   const opts = { id: `demo-${id.slice(0, 8)}`, steps, page: captured.page, ...look, layout, spec };
   const problems = screenDemoProblems(opts);
   if (problems.length) return c.json({ error: "invalid screen demo", problems }, 400);
-  const html = screenDemoHtml(opts);
+  let html: string;
+  if (existing) {
+    // A refresh: new stills in place, everything else as the user left it.
+    const replaced = replaceDemoSteps(existing.html, steps, captured.page);
+    if (!replaced) return c.json({ error: "this composition has no demo stills to replace" }, 400);
+    html = withDemoSpec(replaced, spec);
+  } else {
+    html = screenDemoHtml(opts);
+  }
 
   if (existing) {
     await run(
@@ -357,7 +376,7 @@ app.post("/api/demos", async (c) => {
     ]);
   }
   const row = await get<Composition>("SELECT * FROM compositions WHERE id = ?", [id]);
-  return c.json({ ...(row && (await withLint(row))), warnings: captured.warnings }, existing ? 200 : 201);
+  return c.json({ ...(row && (await withLint(row))), warnings: [...captured.warnings, ...notes] }, existing ? 200 : 201);
 });
 
 app.put("/api/compositions/:id", async (c) => {
