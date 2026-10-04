@@ -14,14 +14,6 @@
 // HyperFrames would render only that much. Kept as a string rather than a DB
 // seed so it goes in via the normal parameterized insert.
 
-/** The shapes a new video can start in: the three canvases HyperFrames
- *  presets and agent.md pick from, all on the same 1080 px short edge. */
-export const SHAPES = [
-  { id: "landscape", name: "Landscape", ratio: "16:9", hint: "YouTube, websites, demos", width: 1920, height: 1080 },
-  { id: "vertical", name: "Vertical", ratio: "9:16", hint: "Reels, Shorts, TikTok", width: 1080, height: 1920 },
-  { id: "square", name: "Square", ratio: "1:1", hint: "Feed posts", width: 1080, height: 1080 },
-] as const;
-
 export function starterHtml(width: number, height: number): string {
   return `<div id="root" data-composition-id="untitled" data-start="0" data-duration="5" data-width="${width}" data-height="${height}"
      style="width:${width}px;height:${height}px;background:#0b1020;position:relative;overflow:hidden;font-family:Inter,system-ui,sans-serif">

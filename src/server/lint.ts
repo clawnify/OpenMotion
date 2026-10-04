@@ -33,6 +33,14 @@ export interface Lint {
 const MAX_FINDINGS = 10;
 
 /**
+ * Rules whose fix this app has no way to make. timeline_track_too_dense says
+ * to move scenes into separate .html files under compositions/; a composition
+ * here is one HTML document, so the badge would point at a fix nobody can
+ * apply (every product demo has a still per step and would carry it).
+ */
+const NOT_HERE = new Set(["timeline_track_too_dense"]);
+
+/**
  * The document the renderer actually loads. The render service wraps a bare
  * root <div> in a page (apps/services `toIndexHtml`) and leaves a full
  * document alone, so lint the same thing, or the linter flags the missing
@@ -66,10 +74,11 @@ export async function lintComposition(html: string): Promise<Lint | null> {
     const { lintHyperframeHtml } = await import("@hyperframes/lint/browser");
     const result = await lintHyperframeHtml(asRendered(html));
     // "info" findings are advice about fonts and the like, not problems.
-    const real = byImportance(result.findings.filter((f) => f.severity !== "info"));
+    // NOT_HERE are rules whose fix cannot be made in this app (see below).
+    const real = byImportance(result.findings.filter((f) => f.severity !== "info" && !NOT_HERE.has(f.code)));
     return {
-      errors: result.errorCount,
-      warnings: result.warningCount,
+      errors: real.filter((f) => f.severity === "error").length,
+      warnings: real.filter((f) => f.severity === "warning").length,
       findings: real.slice(0, MAX_FINDINGS).map((f) => ({
         severity: f.severity as LintFinding["severity"],
         code: f.code,

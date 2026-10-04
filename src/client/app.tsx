@@ -8,7 +8,9 @@ import {
   useHostChanges,
   useHostNavigate,
 } from "@clawnify/app/client";
-import { SHAPES, starterHtml } from "./starter";
+import { starterHtml } from "./starter";
+import { FORMATS, formatOf, frameOf, ratioLabel, withFrame } from "../shared/format";
+import { applyLayout, type DemoLayout } from "../shared/screen-demo";
 import { Timeline, type TimelineEdit } from "./timeline";
 import { compositionLength } from "../shared/length";
 import type { Lint } from "../server/lint";
@@ -73,6 +75,8 @@ interface Asset {
   name: string;
   content_type: string;
   size: number;
+  /** Seconds, for video and audio, when it was measured at upload. */
+  duration?: number | null;
 }
 
 interface RenderJob {
@@ -227,12 +231,12 @@ function Gallery({ navigate }: { navigate: (to: string) => void }) {
             </p>
           </div>
           {comps && comps.length > 0 && (
-            <NewVideoMenu align="end" onPick={newVideo}>
+            <ShapeMenu align="end" onPick={newVideo}>
               <button disabled={creating} className={`${hasChat ? btnSecondary : btnPrimary} shrink-0`}>
                 {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
                 New video
               </button>
-            </NewVideoMenu>
+            </ShapeMenu>
           )}
         </div>
 
@@ -261,11 +265,11 @@ function Gallery({ navigate }: { navigate: (to: string) => void }) {
                 : "Start from a working title card and change the words."
             }
             action={
-              <NewVideoMenu onPick={newVideo}>
+              <ShapeMenu onPick={newVideo}>
                 <button disabled={creating} className={hasChat ? btnSecondary : btnPrimary}>
                   <Plus className="w-4 h-4" /> New video
                 </button>
-              </NewVideoMenu>
+              </ShapeMenu>
             }
           />
         ) : (
@@ -299,19 +303,20 @@ function Gallery({ navigate }: { navigate: (to: string) => void }) {
   );
 }
 
-type Shape = (typeof SHAPES)[number];
+type Shape = (typeof FORMATS)[number];
 
 /**
- * Picks the shape a new video starts in. The shape is the one thing that is
- * costly to change later (every position is laid out against the frame), so
- * it is asked once, up front, where the video is made.
+ * Picks a video's format: the shape a new video starts in, or, from the
+ * editor, the one an existing video changes to. `chosen` marks the current one.
  */
-function NewVideoMenu({
+function ShapeMenu({
   align,
+  chosen,
   onPick,
   children,
 }: {
   align?: "start" | "end";
+  chosen?: string;
   onPick: (shape: Shape) => void;
   children: React.ReactNode;
 }) {
@@ -321,7 +326,7 @@ function NewVideoMenu({
       <PopoverTrigger asChild>{children}</PopoverTrigger>
       <PopoverContent align={align}>
         <Command label="Shape">
-          {SHAPES.map((o) => (
+          {FORMATS.map((o) => (
             <CommandItem
               key={o.id}
               value={o.id}
@@ -336,9 +341,100 @@ function NewVideoMenu({
                 <span className="block truncate text-fine text-faint">{o.hint}</span>
               </span>
               <span className="text-fine text-muted tabular-nums">{o.ratio}</span>
+              <Check className={`w-4 h-4 shrink-0 ${o.id === chosen ? "" : "invisible"}`} aria-hidden />
             </CommandItem>
           ))}
         </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+const LAYOUTS = [
+  { id: "full", name: "Full frame", hint: "The demo fills the video" },
+  { id: "top", name: "Demo on top, clip below", hint: "A talking head under the demo" },
+  { id: "bottom", name: "Clip on top, demo below", hint: "A talking head over the demo" },
+  { id: "pip", name: "Clip in a bubble", hint: "The demo full, the clip in a corner" },
+] as const;
+type LayoutId = (typeof LAYOUTS)[number]["id"];
+
+/** Which layout a demo is in now, read from its HTML. */
+function currentLayout(html: string): LayoutId {
+  const area = /<div id="demo-area"[^>]*top:([^;]+);/.exec(html);
+  // "0", "0px" (demos made before splits were percentages) or "50%".
+  if (area) return parseFloat(area[1]) === 0 ? "top" : "bottom";
+  if (/<video id="clip"[^>]*\s+style="[^"]*border-radius:50%/.test(html)) return "pip";
+  return "full";
+}
+
+/** A video's length, from the upload record or from the file itself. */
+async function clipSeconds(a: Asset): Promise<number> {
+  if (a.duration && a.duration > 0) return a.duration;
+  return new Promise((done) => {
+    const v = document.createElement("video");
+    v.preload = "metadata";
+    v.onloadedmetadata = () => done(Number.isFinite(v.duration) ? v.duration : 0);
+    v.onerror = () => done(0);
+    v.src = `/api/uploads/${a.key}`;
+  });
+}
+
+/**
+ * Picks a layout for a demo, then, for one with a clip, the clip from the
+ * Media library. Applying it is a one-off: the result is ordinary HTML.
+ */
+function LayoutMenu({ current, onPick, children }: { current: LayoutId; onPick: (l: DemoLayout) => void; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const [pending, setPending] = useState<LayoutId | null>(null);
+  const [videos, setVideos] = useState<Asset[] | null>(null);
+  useEffect(() => {
+    if (!open) return setPending(null);
+    api.get<Asset[]>("/api/assets").then((all) => setVideos(all.filter((a) => a.content_type.startsWith("video/"))));
+  }, [open]);
+
+  async function choose(id: LayoutId, clip?: Asset) {
+    if (id === "full") return finish({ kind: "full" });
+    if (!clip) return setPending(id);
+    const seconds = await clipSeconds(clip);
+    const src = `assets/${clip.key}`;
+    finish(id === "pip" ? { kind: "pip", clip: src, seconds } : { kind: "split", demo: id === "top" ? "top" : "bottom", clip: src, seconds });
+  }
+  function finish(l: DemoLayout) {
+    setOpen(false);
+    onPick(l);
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>{children}</PopoverTrigger>
+      <PopoverContent align="start">
+        {pending === null ? (
+          <Command label="Layout">
+            {LAYOUTS.map((o) => (
+              <CommandItem key={o.id} value={o.id} onSelect={() => choose(o.id)}>
+                <span className="flex-1 min-w-0">
+                  <span className="block truncate">{o.name}</span>
+                  <span className="block truncate text-fine text-faint">{o.hint}</span>
+                </span>
+                <Check className={`w-4 h-4 shrink-0 ${o.id === current ? "" : "invisible"}`} aria-hidden />
+              </CommandItem>
+            ))}
+          </Command>
+        ) : videos && videos.length === 0 ? (
+          <p className="p-3 text-body-sm text-muted max-w-64">Upload a video in Media first, then pick it here.</p>
+        ) : (
+          <Command label="Clip">
+            <CommandGroup heading="Pick the clip">
+              {(videos ?? []).map((a) => (
+                <CommandItem key={a.id} value={a.key} onSelect={() => choose(pending, a)}>
+                  <Video className="w-4 h-4 shrink-0 text-muted" />
+                  <span className="flex-1 min-w-0 truncate">{a.name}</span>
+                  {a.duration ? <span className="text-fine text-muted tabular-nums">{a.duration.toFixed(1)}s</span> : null}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </Command>
+        )}
       </PopoverContent>
     </Popover>
   );
@@ -386,7 +482,7 @@ function DescribeVideo() {
         rows={2}
         maxLength={1800}
         aria-label="Describe a video"
-        placeholder="Describe a video: what it is for, how long, vertical or landscape, the mood. A 15-second vertical teaser for our launch, bold type, fast cuts."
+        placeholder="Describe a video: what it is for, how long, vertical or landscape, the mood. Or paste a link to a web app and say what the demo should show."
         className="field resize-none"
       />
       <div className="flex items-center justify-between gap-3 mt-2">
@@ -728,6 +824,44 @@ function Editor({
     // persist() records pendingBefore; history was moved by hand above.
   }
 
+  const frame = frameOf(html);
+  const currentFormat = frame ? formatOf(frame.width, frame.height) : undefined;
+
+  /**
+   * Change the video's format. Only the canvas changes: a product demo fits
+   * itself to it when it plays; anything else is free HTML whose layout can't
+   * be moved mechanically, so the AI is asked to re-lay it out (a draft the
+   * user sends). One undo step either way.
+   */
+  function changeFormat(f: Shape) {
+    if (!frame || (frame.width === f.width && frame.height === f.height)) return;
+    const from = currentFormat ? `${currentFormat.name} ${currentFormat.ratio}` : ratioLabel(frame.width, frame.height);
+    if (pendingBefore.current === null) pendingBefore.current = html;
+    const next = withFrame(html, f.width, f.height);
+    setHtml(next);
+    persist(next, 0);
+    const fitsItself = /class="clip demo-step"/.test(next);
+    if (!fitsItself && hasChat && parseClips(next).clips.length > 0) {
+      openChat(
+        `In the OpenMotion video "${name}": I changed its format from ${from} to ${f.name} ${f.ratio} ` +
+          `(${f.width}×${f.height}). Re-lay out every element for the new frame so nothing is cut off ` +
+          `or crowded; keep the words, timing and motion.`,
+      );
+    }
+  }
+
+  const isDemo = /class="clip demo-step"/.test(html);
+
+  /** Put the demo in a layout, once (shared/screen-demo.ts applyLayout). One undo step. */
+  function changeLayout(layout: DemoLayout) {
+    const next = applyLayout(html, layout);
+    if (!next || next === html) return;
+    if (pendingBefore.current === null) pendingBefore.current = html;
+    setSelectedClip(null);
+    setHtml(next);
+    persist(next, 0);
+  }
+
   async function save() {
     setSaving(true);
     try {
@@ -793,6 +927,8 @@ function Editor({
                   src={`/api/compositions/${comp.id}/preview?seek=${poster}`}
                   className="w-full h-full"
                   title="preview"
+                  // Lets the composition's <audio> clips play when the user presses play.
+                  allow="autoplay"
                 />
               </div>
             </Panel>
@@ -808,11 +944,45 @@ function Editor({
                   onClose={() => setSelectedClip(null)}
                 />
               ) : (
-                <div className="px-4 py-4">
-                  <div className="text-label text-muted mb-1">Inspector</div>
-                  <p className="text-body-sm text-muted">
-                    Select a clip, in the timeline or in the video, to edit it.
-                  </p>
+                <div className="px-4 py-4 space-y-5">
+                  {frame && (
+                    <div>
+                      <div className="text-label text-muted mb-1.5">Format</div>
+                      <ShapeMenu chosen={currentFormat?.id} onPick={changeFormat}>
+                        <button className={`${btnSecondary} w-full justify-between`}>
+                          <span className="flex items-center gap-2 min-w-0">
+                            <ShapeGlyph width={frame.width} height={frame.height} />
+                            <span className="truncate">
+                              {currentFormat ? currentFormat.name : "Custom"}{" "}
+                              <span className="text-muted tabular-nums">{ratioLabel(frame.width, frame.height)}</span>
+                            </span>
+                          </span>
+                          <ChevronDown className="w-4 h-4 shrink-0" />
+                        </button>
+                      </ShapeMenu>
+                      <p className="text-fine text-faint mt-1.5 tabular-nums">
+                        {frame.width} × {frame.height}
+                      </p>
+                    </div>
+                  )}
+                  {isDemo && (
+                    <div>
+                      <div className="text-label text-muted mb-1.5">Layout</div>
+                      <LayoutMenu current={currentLayout(html)} onPick={changeLayout}>
+                        <button className={`${btnSecondary} w-full justify-between`}>
+                          <span className="truncate">{LAYOUTS.find((o) => o.id === currentLayout(html))?.name}</span>
+                          <ChevronDown className="w-4 h-4 shrink-0" />
+                        </button>
+                      </LayoutMenu>
+                      <p className="text-fine text-faint mt-1.5">A starting point: change anything after.</p>
+                    </div>
+                  )}
+                  <div>
+                    <div className="text-label text-muted mb-1">Inspector</div>
+                    <p className="text-body-sm text-muted">
+                      Select a clip, in the timeline or in the video, to edit it.
+                    </p>
+                  </div>
                 </div>
               )}
             </Panel>

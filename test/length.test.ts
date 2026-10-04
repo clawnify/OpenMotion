@@ -2,7 +2,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { clipsEnd, compositionLength, rootLength, withLength } from "../src/shared/length.ts";
-import { SHAPES, starterHtml } from "../src/client/starter.ts";
+import { starterHtml } from "../src/client/starter.ts";
+import { FORMATS } from "../src/shared/format.ts";
 
 const STARTER_HTML = starterHtml(1920, 1080);
 
@@ -61,7 +62,7 @@ test("clips inside an inline nested composition do not count", () => {
 });
 
 test("every shape starts at its own size and states the same length", () => {
-  for (const { width, height } of SHAPES) {
+  for (const { width, height } of FORMATS) {
     const html = starterHtml(width, height);
     const root = html.match(/<div id="root"[^>]*>/)![0];
     assert.match(root, new RegExp(`data-width="${width}" data-height="${height}"`));
