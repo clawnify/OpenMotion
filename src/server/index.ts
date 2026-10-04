@@ -12,7 +12,7 @@ import { renderComposition } from "./render";
 import { compositionLength, withLength } from "../shared/length";
 import { lintComposition } from "./lint";
 import { z } from "zod";
-import { screenDemoHtml, screenDemoProblems, defaultSeconds, demoSpecOf } from "../shared/screen-demo";
+import { type ScreenDemoOptions, screenDemoHtml, screenDemoProblems, defaultSeconds, demoSpecOf, fitSeconds, minimumSeconds } from "../shared/screen-demo";
 import { capturePage, outlinePage, ClawnifyServicesError, type CaptureStep, type CapturedPage } from "@clawnify/services";
 
 type Bindings = {
@@ -105,6 +105,7 @@ const screenDemoSchema = z.object({
   accent: z.string().optional(),
   tilt: z.boolean().optional(),
   floating: z.boolean().optional(),
+  fit: z.enum(["contain", "cover"]).optional(),
 });
 
 app.post("/api/compositions/screen-demo", async (c) => {
@@ -141,6 +142,7 @@ app.post("/api/compositions/screen-demo", async (c) => {
     accent: b.accent,
     tilt: b.tilt,
     floating: b.floating,
+    fit: b.fit,
   };
   const problems = screenDemoProblems(opts);
   if (problems.length) return c.json({ error: "invalid screen demo", problems }, 400);
@@ -195,9 +197,26 @@ app.post("/api/demos/outline", async (c) => {
   }
 });
 
+// A layout names its clip by asset key; the app turns it into the clip's
+// path and length (see /api/demos).
+const position = z.string().regex(/^\d{1,3}% \d{1,3}%$/).optional();
+const layoutSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("full") }),
+  z.object({ kind: z.literal("split"), demo: z.enum(["top", "bottom"]), clip: z.string().min(1), seconds: z.number().positive().optional(), position }),
+  z.object({
+    kind: z.literal("pip"),
+    clip: z.string().min(1),
+    seconds: z.number().positive().optional(),
+    corner: z.enum(["bottom-right", "bottom-left", "top-right", "top-left"]).optional(),
+    position,
+  }),
+]);
+
 const lookSchema = {
+  layout: layoutSchema.optional(),
   frame: sizeSchema.optional(),
   floating: z.boolean().optional(),
+  fit: z.enum(["contain", "cover"]).optional(),
   tilt: z.boolean().optional(),
   accent: z.string().optional(),
   background: z.string().max(300).optional(),
@@ -268,7 +287,7 @@ app.post("/api/demos", async (c) => {
     await run("INSERT INTO assets (key, name, content_type, size) VALUES (?, ?, 'image/png', ?)", [key, key, data.byteLength]);
     return key;
   };
-  const steps = [];
+  const steps: ScreenDemoOptions["steps"] = [];
   try {
     for (const [i, s] of captured.steps.entries()) {
       const asked = spec.steps[i] as { seconds?: number };
@@ -288,7 +307,27 @@ app.post("/api/demos", async (c) => {
     return captureFailed(c, err);
   }
 
-  const opts = { id: `demo-${id.slice(0, 8)}`, steps, page: captured.page, ...look, spec };
+  // A layout's clip: an uploaded video, played for its own length, and the
+  // steps spread over that length unless the spec timed them itself.
+  let layout: ScreenDemoOptions["layout"] = undefined;
+  const l = look.layout;
+  if (l && l.kind !== "full") {
+    const asset = await get<Asset & { duration: number | null }>("SELECT * FROM assets WHERE key = ?", [l.clip]);
+    if (!asset || !asset.content_type.startsWith("video/")) {
+      return c.json({ error: "invalid demo", problems: [`layout.clip: no uploaded video with key ${l.clip}`] }, 400);
+    }
+    const seconds = l.seconds ?? asset.duration;
+    if (!seconds) {
+      return c.json({ error: "invalid demo", problems: ["layout.seconds: the clip's length is unknown; pass seconds"] }, 400);
+    }
+    layout = { ...l, clip: `assets/${l.clip}`, seconds };
+    if (spec.steps.every((st) => (st as { seconds?: number }).seconds === undefined)) {
+      const fitted = fitSeconds(steps.map((st) => st.seconds), steps.map((st) => minimumSeconds(st)), seconds);
+      fitted.forEach((sec, i) => (steps[i].seconds = sec));
+    }
+  }
+
+  const opts = { id: `demo-${id.slice(0, 8)}`, steps, page: captured.page, ...look, layout, spec };
   const problems = screenDemoProblems(opts);
   if (problems.length) return c.json({ error: "invalid screen demo", problems }, 400);
   const html = screenDemoHtml(opts);

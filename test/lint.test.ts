@@ -67,3 +67,11 @@ test("a product demo's many stills are not reported: the fix (separate files) ca
   assert.ok(lint && !lint.findings.some((f) => f.code === "timeline_track_too_dense"), JSON.stringify(lint));
   assert.equal(lint.warnings, 0);
 });
+
+test("a split demo with its clip and the clip's audio lints clean", async () => {
+  const { screenDemoHtml } = await import("../src/shared/screen-demo.ts");
+  const steps = [{ src: "assets/s1.png", seconds: 3, click: { x: 10, y: 10, w: 20, h: 20 } }, { src: "assets/s2.png", seconds: 3 }];
+  const html = screenDemoHtml({ id: "d", steps, frame: { width: 1080, height: 1920 }, fit: "cover", layout: { kind: "split", demo: "top", clip: "assets/t.mp4", seconds: 6 } });
+  const lint = await lintComposition(html);
+  assert.equal(lint?.errors, 0, JSON.stringify(lint));
+});

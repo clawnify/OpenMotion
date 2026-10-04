@@ -1,7 +1,7 @@
 // Run: pnpm test (Node 22+, no dependencies).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { screenDemoHtml, screenDemoProblems, typingWindow, defaultSeconds, demoSpecOf, type ScreenDemoOptions } from "../src/shared/screen-demo.ts";
+import { screenDemoHtml, screenDemoProblems, typingWindow, defaultSeconds, demoSpecOf, fitSeconds, type ScreenDemoOptions } from "../src/shared/screen-demo.ts";
 import { compositionLength } from "../src/shared/length.ts";
 
 const demo: ScreenDemoOptions = {
@@ -152,4 +152,46 @@ test("a step lasts long enough for its action unless the spec says", () => {
   assert.equal(defaultSeconds({ click: {} }, false), 3.5);
   assert.equal(defaultSeconds({}, true), 3);
   assert.equal(defaultSeconds({}, false), 2.5);
+});
+
+test("fit cover is marked for the kit; contain is the default and leaves no mark", () => {
+  const win = (html: string) => html.match(/<div id="win"[^>]*>/)![0];
+  assert.match(win(screenDemoHtml({ ...demo, fit: "cover" })), /data-fit="cover"/);
+  assert.doesNotMatch(win(screenDemoHtml(demo)), /data-fit/);
+});
+
+test("steps spread over a clip's length in proportion, never below their minimum", () => {
+  assert.deepEqual(fitSeconds([3.5, 3.5, 3], [2, 2, 0.5], 7.5), [2.625, 2.625, 2.25]);
+  // Too short for the click minimums: the minimums hold, the rest shrinks.
+  assert.deepEqual(fitSeconds([3.5, 3.5, 3], [2, 2, 0.5], 5), [2, 2, 1]);
+  // Shorter than the minimums together: the minimums win.
+  assert.deepEqual(fitSeconds([3.5, 3.5], [2, 2], 3), [2, 2]);
+  assert.deepEqual(fitSeconds([3, 3], [2, 2], 12), [6, 6]);
+});
+
+test("split: the demo fills its half, the clip the other, muted with its sound on <audio>", () => {
+  const clip = { clip: "assets/talk.mp4", seconds: 7.5 };
+  const top = screenDemoHtml({ ...demo, frame: { width: 1080, height: 1920 }, layout: { kind: "split", demo: "top", ...clip } });
+  assert.match(top, /<div id="demo-area" style="position:absolute;left:0;top:0px;width:1080px;height:960px;overflow:hidden">\s*<div id="cam"/);
+  assert.match(top, /<video id="clip" src="assets\/talk.mp4" class="clip" data-start="0" data-duration="7.5" data-track-index="2" muted playsinline\s+style="position:absolute;left:0;top:960px;width:1080px;height:960px;object-fit:cover/);
+  assert.match(top, /<audio id="clip-audio" src="assets\/talk.mp4" class="clip" data-start="0" data-duration="7.5"/);
+  // The video runs as long as the longer of the two.
+  assert.equal(compositionLength(top), 10);
+  const bottom = screenDemoHtml({ ...demo, frame: { width: 1080, height: 1920 }, layout: { kind: "split", demo: "bottom", ...clip } });
+  assert.match(bottom, /id="demo-area" style="position:absolute;left:0;top:960px/);
+  assert.match(bottom, /<video id="clip"[^>]*\s+style="position:absolute;left:0;top:0px/);
+});
+
+test("pip: the demo fills the video, the clip is a round bubble in the corner", () => {
+  const html = screenDemoHtml({ ...demo, layout: { kind: "pip", clip: "assets/talk.mp4", seconds: 12, corner: "bottom-left" } });
+  assert.doesNotMatch(html, /id="demo-area"/);
+  assert.match(html, /left:43px;bottom:43px;width:324px;height:324px;border-radius:50%/);
+  assert.equal(compositionLength(html), 12);
+});
+
+test("a layout with a bad clip or position is named", () => {
+  assert.deepEqual(
+    screenDemoProblems({ ...demo, layout: { kind: "split", demo: "top", clip: 'x"y', seconds: 0, position: "middle" } }),
+    ["layout.clip: an assets/<key> path", "layout.seconds: above 0", 'layout.position: like "50% 40%"'],
+  );
 });

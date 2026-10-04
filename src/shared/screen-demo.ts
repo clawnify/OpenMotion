@@ -47,6 +47,21 @@ export interface ScreenDemoStep {
   type?: { box: Box; frames: string[] };
 }
 
+/**
+ * Where the demo sits and what goes with it. A layout is a template for a
+ * common shape, so nobody hand-edits the HTML for it:
+ * - full: the demo fills the video (the default);
+ * - split: the demo fills one half (`demo`: "top" or "bottom") and a video
+ *   clip, typically a talking head, fills the other;
+ * - pip: the demo fills the video and the clip sits in a round bubble in a corner.
+ * The clip plays muted with its sound on a separate <audio> (HyperFrames'
+ * rule), for `seconds` (its length).
+ */
+export type DemoLayout =
+  | { kind: "full" }
+  | { kind: "split"; demo: "top" | "bottom"; clip: string; seconds: number; position?: string }
+  | { kind: "pip"; clip: string; seconds: number; corner?: "bottom-right" | "bottom-left" | "top-right" | "top-left"; position?: string };
+
 export interface ScreenDemoOptions {
   id: string;
   steps: ScreenDemoStep[];
@@ -59,12 +74,19 @@ export interface ScreenDemoOptions {
    * background around it). Off by default: the app fills the video edge to edge.
    */
   floating?: boolean;
+  /**
+   * How the app fills its area when the shapes differ: "contain" (default)
+   * shows all of it with bars, "cover" fills the area and crops the overflow.
+   */
+  fit?: "contain" | "cover";
   /** CSS background around the app: behind the floating window, or in a letterbox. */
   background?: string;
   /** The click ripple and connection colour, as `r,g,b`. */
   accent?: string;
   /** Open with the app tilting in from 3D, and close with it tilting away. */
   tilt?: boolean;
+  /** Where the demo sits and what goes with it (default: it fills the video). */
+  layout?: DemoLayout;
   /**
    * The capture spec this demo was made from, kept inside the composition so
    * it can be captured again when the app changes (see demoSpecOf).
@@ -94,6 +116,12 @@ export function screenDemoProblems(opts: ScreenDemoOptions): string[] {
   if (!/^[a-z0-9][a-z0-9-]*$/i.test(opts.id)) out.push("id: letters, digits and dashes only");
   if (opts.steps.length === 0) out.push("steps: at least one");
   if (opts.accent !== undefined && !/^\d{1,3},\d{1,3},\d{1,3}$/.test(opts.accent)) out.push("accent: r,g,b");
+  const l = opts.layout;
+  if (l && l.kind !== "full") {
+    if (badSrc(l.clip)) out.push("layout.clip: an assets/<key> path");
+    if (!(l.seconds > 0)) out.push("layout.seconds: above 0");
+    if (l.position !== undefined && !/^\d{1,3}% \d{1,3}%$/.test(l.position)) out.push("layout.position: like \"50% 40%\"");
+  }
   opts.steps.forEach((s, i) => {
     const n = `steps[${i}]`;
     if (badSrc(s.src)) out.push(`${n}.src: an assets/<key> path`);
@@ -116,6 +144,33 @@ export function screenDemoProblems(opts: ScreenDemoOptions): string[] {
     }
   });
   return out;
+}
+
+/**
+ * Step lengths spread over `total` seconds (a clip's length), in proportion,
+ * never below what each step's action needs. When even the minimums are
+ * longer than `total`, the minimums win and the clip holds its last frame.
+ */
+export function fitSeconds(lengths: number[], minimums: number[], total: number): number[] {
+  const sum = lengths.reduce((a, b) => a + b, 0);
+  if (!(total > 0) || sum <= 0) return lengths;
+  let out = lengths.map((l) => (l * total) / sum);
+  // Lift the steps that fell below their minimum and take the time from the rest.
+  for (let pass = 0; pass < lengths.length; pass++) {
+    const short = out.map((l, i) => l < minimums[i]);
+    if (!short.some(Boolean)) break;
+    const fixed = out.reduce((a, l, i) => a + (short[i] ? minimums[i] : 0), 0);
+    const freeSum = lengths.reduce((a, l, i) => a + (short[i] ? 0 : l), 0);
+    const left = total - fixed;
+    if (left <= 0 || freeSum <= 0) return out.map((l, i) => Math.max(l, minimums[i]));
+    out = out.map((l, i) => (short[i] ? minimums[i] : (lengths[i] * left) / freeSum));
+  }
+  return out.map((l) => Math.round(l * 1000) / 1000);
+}
+
+/** The shortest a step can be for its action (0 for a step without one). */
+export function minimumSeconds(step: { click?: unknown; drag?: unknown; connect?: unknown; type?: unknown }): number {
+  return step.type ? MIN_STEP.type : step.drag ? MIN_STEP.drag : step.connect ? MIN_STEP.connect : step.click ? MIN_STEP.click : 0.5;
 }
 
 /** How long a step lasts when the spec does not say: long enough for its action. */
@@ -189,11 +244,39 @@ export function screenDemoHtml(opts: ScreenDemoOptions): string {
     t += s.seconds;
   });
 
+  // The layout: the area the demo fills (the kit fits it to #cam's parent)
+  // and the clip that goes with it, video muted with its sound on <audio>.
+  const layout = opts.layout ?? { kind: "full" as const };
+  let open = "", close = "", clip = "";
+  if (layout.kind !== "full") {
+    const length = Math.max(t, layout.seconds);
+    t = length;
+    const at = `data-start="0" data-duration="${round(layout.seconds)}"`;
+    const pos = `object-fit:cover;object-position:${layout.position ?? "50% 45%"}`;
+    let box: string;
+    if (layout.kind === "split") {
+      const half = Math.round(fh / 2);
+      const demoTop = layout.demo === "top" ? 0 : fh - half;
+      const clipTop = layout.demo === "top" ? half : 0;
+      open = `  <div id="demo-area" style="position:absolute;left:0;top:${demoTop}px;width:${fw}px;height:${half}px;overflow:hidden">\n`;
+      close = `  </div>\n`;
+      box = `left:0;top:${clipTop}px;width:${fw}px;height:${fh - half}px`;
+    } else {
+      const d = Math.round(Math.min(fw, fh) * 0.3), m = Math.round(Math.min(fw, fh) * 0.04);
+      const [v, h] = (layout.corner ?? "bottom-right").split("-");
+      box = `${h}:${m}px;${v}:${m}px;width:${d}px;height:${d}px;border-radius:50%;border:6px solid #fff;box-shadow:0 12px 40px rgba(0,0,0,.35);z-index:5`;
+    }
+    clip =
+      `  <video id="clip" src="${esc(layout.clip)}" class="clip" ${at} data-track-index="2" muted playsinline\n` +
+      `         style="position:absolute;${box};${pos}"></video>\n` +
+      `  <audio id="clip-audio" src="${esc(layout.clip)}" class="clip" ${at} data-track-index="3" data-volume="1"></audio>\n`;
+  }
+
   return `<div id="root" data-composition-id="${opts.id}" data-start="0" data-duration="${round(t)}" data-width="${fw}" data-height="${fh}"
      style="width:${fw}px;height:${fh}px;position:relative;overflow:hidden;background:${esc(bg)}">
-  <div id="cam" style="position:absolute;left:0;top:0;width:100%;height:100%;transform-origin:0 0">
+${open}  <div id="cam" style="position:absolute;left:0;top:0;width:100%;height:100%;transform-origin:0 0">
     <div id="frame" style="position:absolute;overflow:hidden;background:#fff;${windowLook}">
-    <div id="win" data-page-width="${pw}" data-page-height="${ph}" data-accent="${accent}"${opts.floating ? ` data-floating="1"` : ""}${opts.tilt ? ` data-tilt="1"` : ""}
+    <div id="win" data-page-width="${pw}" data-page-height="${ph}" data-accent="${accent}"${opts.floating ? ` data-floating="1"` : ""}${opts.fit === "cover" ? ` data-fit="cover"` : ""}${opts.tilt ? ` data-tilt="1"` : ""}
          style="position:absolute;left:0;top:0;width:${pw}px;height:${ph}px;transform-origin:0 0">
 ${imgs.join("\n")}
       <div id="ripple" style="position:absolute;left:0;top:0;width:56px;height:56px;margin:-28px 0 0 -28px;border-radius:50%;background:rgba(${accent},.35);border:2px solid rgba(${accent},.8);opacity:0"></div>
@@ -203,7 +286,7 @@ ${imgs.join("\n")}
     </div>
     </div>
   </div>
-${opts.spec === undefined ? "" : `  <script type="application/json" id="demo-spec">${JSON.stringify(opts.spec).replace(/</g, "\\u003c")}</script>\n`}  <script src="https://cdn.jsdelivr.net/npm/gsap@3/dist/gsap.min.js"></script>
+${close}${clip}${opts.spec === undefined ? "" : `  <script type="application/json" id="demo-spec">${JSON.stringify(opts.spec).replace(/</g, "\\u003c")}</script>\n`}  <script src="https://cdn.jsdelivr.net/npm/gsap@3/dist/gsap.min.js"></script>
   <script>
 ${KIT}
   </script>
@@ -227,11 +310,15 @@ const KIT = `    // Screen-demo kit: builds the camera, cursor and actions from 
     (function () {
       var win = document.getElementById("win"), frame = document.getElementById("frame");
       var root = win.closest("[data-composition-id]");
-      var FW = +root.dataset.width, FH = +root.dataset.height, LEN = +root.dataset.duration;
+      // The demo fills the element #cam sits in: the whole video by default,
+      // or any area a layout gives it (the top half above a talking head).
+      var area = document.getElementById("cam").parentElement;
+      var FW = area.offsetWidth || +root.dataset.width, FH = area.offsetHeight || +root.dataset.height, LEN = +root.dataset.duration;
       var PW = +win.dataset.pageWidth, PH = +win.dataset.pageHeight, accent = win.dataset.accent || "224,82,104";
-      // Fit the page to the video: edge to edge (letterboxed if the shapes
-      // differ), or floating at 1:1 with a margin, smaller only if it must be.
-      var k = win.dataset.floating ? Math.min(1, 0.9 * FW / PW, 0.9 * FH / PH) : Math.min(FW / PW, FH / PH);
+      // Fit the page to its area: edge to edge (bars if the shapes differ, or
+      // cropped with data-fit="cover"), or floating at 1:1 with a margin.
+      var k = win.dataset.floating ? Math.min(1, 0.9 * FW / PW, 0.9 * FH / PH)
+        : win.dataset.fit === "cover" ? Math.max(FW / PW, FH / PH) : Math.min(FW / PW, FH / PH);
       var WX = Math.round((FW - PW * k) / 2), WY = Math.round((FH - PH * k) / 2);
       frame.style.left = WX + "px"; frame.style.top = WY + "px";
       frame.style.width = Math.round(PW * k) + "px"; frame.style.height = Math.round(PH * k) + "px";
