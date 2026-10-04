@@ -125,6 +125,20 @@ for a video or sound, when you know it). The key is made from the file name,
 lowercased and de-duplicated, so reference the `key` the response returns, not
 the name you sent.
 
+When the user attaches an image in the dashboard chat ("put my face at the
+bottom"), upload it with `call_app_api`'s `files`; the bytes go straight to the
+app and never pass through you:
+
+```
+call_app_api { method: "POST", path: "/api/assets",
+               files: [{ field: "file", attachment: 1, filename: "face.jpg" }] }
+```
+
+`attachment` counts the images attached in this chat, newest first (1 = the
+latest). Only the dashboard chat has `files`, and only for images (JPEG, PNG,
+WebP, GIF, 5 MB each, up to 5 per call). A video or a sound has to be uploaded
+by the user in the editor's Media sidebar.
+
 Users upload in the editor's **Media** sidebar and click an item to put it in
 the video at the playhead. That adds a clip filling the frame, on new lanes
 above the others, drawn on top, with an id `media-<key>`: an `<img>` (3 s), or a
