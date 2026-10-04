@@ -11,6 +11,9 @@ import {
 import { renderComposition } from "./render";
 import { compositionLength, withLength } from "../shared/length";
 import { lintComposition } from "./lint";
+import { z } from "zod";
+import { type ScreenDemoOptions, screenDemoHtml, screenDemoProblems, defaultSeconds, demoSpecOf, fitSeconds, minimumSeconds, replaceDemoSteps, withDemoSpec } from "../shared/screen-demo";
+import { capturePage, outlinePage, ClawnifyServicesError, type CaptureStep, type CapturedPage } from "@clawnify/services";
 
 type Bindings = {
   DB: D1Database;
@@ -74,6 +77,306 @@ app.post("/api/compositions", async (c) => {
   );
   const row = await get<Composition>("SELECT * FROM compositions WHERE id = ?", [id]);
   return c.json(row && (await withLint(row)), 201);
+});
+
+// A product demo in the style of a screen recording, built from one captured
+// still per state of an app (see shared/screen-demo.ts). Steps name uploaded
+// assets by key. With composition_id the stills are swapped into that video
+// and the rest of it (layout, clips, look) is left as it is; without it, a
+// new one is made.
+const boxSchema = z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() });
+const sizeSchema = z.object({ width: z.number().int().min(16).max(4096), height: z.number().int().min(16).max(4096) });
+const screenDemoSchema = z.object({
+  composition_id: z.string().optional(),
+  name: z.string().trim().min(1).optional(),
+  description: z.string().optional(),
+  steps: z.array(z.object({
+    asset: z.string().min(1),
+    seconds: z.number(),
+    focus: boxSchema.optional(),
+    click: boxSchema.optional(),
+    drag: z.object({ from: boxSchema, to: boxSchema }).optional(),
+    connect: z.object({ from: boxSchema, to: boxSchema }).optional(),
+    type: z.object({ box: boxSchema, frames: z.array(z.string().min(1)).min(1).max(30) }).optional(),
+  })).min(1).max(40),
+  page: sizeSchema.optional(),
+  frame: sizeSchema.optional(),
+  background: z.string().max(300).optional(),
+  accent: z.string().optional(),
+  tilt: z.boolean().optional(),
+  floating: z.boolean().optional(),
+  fit: z.enum(["contain", "cover"]).optional(),
+});
+
+app.post("/api/compositions/screen-demo", async (c) => {
+  const parsed = screenDemoSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) {
+    return c.json({ error: "invalid screen demo", problems: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) }, 400);
+  }
+  const b = parsed.data;
+  const existing = b.composition_id
+    ? await get<Composition>("SELECT * FROM compositions WHERE id = ?", [b.composition_id])
+    : null;
+  if (b.composition_id && !existing) return c.json({ error: "Not found" }, 404);
+  if (!existing && !b.name) return c.json({ error: "name is required" }, 400);
+
+  const keys = new Set((await query<{ key: string }>("SELECT key FROM assets")).map((a) => a.key));
+  const missing = b.steps.flatMap((s) => [s.asset, ...(s.type?.frames ?? [])]).filter((k) => !keys.has(k));
+  if (missing.length) return c.json({ error: "unknown asset", problems: missing.map((k) => `no asset with key ${k}`) }, 400);
+
+  const id = existing?.id ?? crypto.randomUUID();
+  const opts = {
+    id: `demo-${id.slice(0, 8)}`,
+    steps: b.steps.map((s) => ({
+      src: `assets/${s.asset}`,
+      seconds: s.seconds,
+      focus: s.focus,
+      click: s.click,
+      drag: s.drag,
+      connect: s.connect,
+      type: s.type && { box: s.type.box, frames: s.type.frames.map((k) => `assets/${k}`) },
+    })),
+    page: b.page,
+    frame: b.frame,
+    background: b.background,
+    accent: b.accent,
+    tilt: b.tilt,
+    floating: b.floating,
+    fit: b.fit,
+  };
+  const problems = screenDemoProblems(opts);
+  if (problems.length) return c.json({ error: "invalid screen demo", problems }, 400);
+  // Into an existing composition, only its stills change (as a refresh does).
+  const replaced = existing ? replaceDemoSteps(existing.html, opts.steps, opts.page ?? { width: 1600, height: 900 }) : null;
+  if (existing && !replaced) return c.json({ error: "this composition has no demo stills to replace" }, 400);
+  const html = replaced ?? screenDemoHtml(opts);
+
+  if (existing) {
+    await run(
+      `UPDATE compositions SET name = ?, description = ?, html = ?, updated_at = datetime('now') WHERE id = ?`,
+      [b.name ?? existing.name, b.description ?? existing.description, html, id],
+    );
+  } else {
+    await run(
+      "INSERT INTO compositions (id, name, description, html, fps) VALUES (?, ?, ?, ?, ?)",
+      [id, b.name, b.description ?? "", html, 30],
+    );
+  }
+  const row = await get<Composition>("SELECT * FROM compositions WHERE id = ?", [id]);
+  return c.json(row && (await withLint(row)), existing ? 200 : 201);
+});
+
+// ── Product demos from a link ────────────────────────────────────────
+// The AI in the app plans a demo by looking at the page (outline: one
+// screenshot and its visible controls after any steps so far), then makes it
+// in one call: the capture service walks the page for real (capture.ts), the
+// stills land in the media library and the composition is built with the
+// screen-demo kit. The spec stays inside the composition, so the same call
+// with only composition_id captures the demo again after the app changes.
+
+const CAPTURE_OFF = { error: "Capture service not configured (missing CLAWNIFY_TOKEN). Captures run on deployed apps." };
+
+const servicesEnv = (env: Bindings) => ({ CLAWNIFY_TOKEN: env.CLAWNIFY_TOKEN, CLAWNIFY_SERVICES_URL: env.SERVICES_URL });
+
+/** A capture that failed: the spec's fault (400) or the service's (502). */
+function captureFailed(c: { json: (b: unknown, s: 400 | 502) => Response }, err: unknown) {
+  if (!(err instanceof ClawnifyServicesError)) throw err;
+  const problems = (err.body?.problems as string[] | undefined) ?? undefined;
+  return c.json({ error: err.message, ...(problems ? { problems } : {}) }, err.status === 422 ? 400 : 502);
+}
+
+app.post("/api/demos/outline", async (c) => {
+  if (!c.env.CLAWNIFY_TOKEN) return c.json(CAPTURE_OFF, 503);
+  const b = await c.req
+    .json<{ url?: string; page?: { width: number; height: number }; wait_gone?: string; steps?: CaptureStep[]; allow_writes?: boolean }>()
+    .catch(() => null);
+  if (!b?.url) return c.json({ error: "url is required" }, 400);
+  try {
+    return c.json(
+      await outlinePage(servicesEnv(c.env), { url: b.url, page: b.page, waitGone: b.wait_gone, steps: b.steps, allowWrites: b.allow_writes === true }),
+    );
+  } catch (err) {
+    return captureFailed(c, err);
+  }
+});
+
+// A layout names its clip by asset key; the app turns it into the clip's
+// path and length (see /api/demos).
+const position = z.string().regex(/^\d{1,3}% \d{1,3}%$/).optional();
+const layoutSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("full") }),
+  z.object({ kind: z.literal("split"), demo: z.enum(["top", "bottom"]), clip: z.string().min(1), seconds: z.number().positive().optional(), position }),
+  z.object({
+    kind: z.literal("pip"),
+    clip: z.string().min(1),
+    seconds: z.number().positive().optional(),
+    corner: z.enum(["bottom-right", "bottom-left", "top-right", "top-left"]).optional(),
+    position,
+  }),
+]);
+
+const lookSchema = {
+  layout: layoutSchema.optional(),
+  frame: sizeSchema.optional(),
+  floating: z.boolean().optional(),
+  fit: z.enum(["contain", "cover"]).optional(),
+  tilt: z.boolean().optional(),
+  accent: z.string().optional(),
+  background: z.string().max(300).optional(),
+};
+const demoSchema = z.object({
+  composition_id: z.string().optional(),
+  name: z.string().trim().min(1).optional(),
+  description: z.string().optional(),
+  url: z.string().optional(),
+  page: sizeSchema.optional(),
+  wait_gone: z.string().optional(),
+  steps: z.array(z.record(z.unknown())).min(1).max(12).optional(),
+  allow_writes: z.boolean().optional(),
+  ...lookSchema,
+});
+// What a demo keeps to be captured again: the walk, never the look. Layout
+// and look options shape a new demo once; after that the composition is the
+// user's, and a refresh changes its stills only.
+type DemoSpec = {
+  url: string;
+  page?: { width: number; height: number };
+  wait_gone?: string;
+  steps: Record<string, unknown>[];
+  allow_writes?: boolean;
+};
+
+app.post("/api/demos", async (c) => {
+  if (!c.env.CLAWNIFY_TOKEN) return c.json(CAPTURE_OFF, 503);
+  const parsed = demoSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) {
+    return c.json({ error: "invalid demo", problems: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) }, 400);
+  }
+  const b = parsed.data;
+  const existing = b.composition_id
+    ? await get<Composition>("SELECT * FROM compositions WHERE id = ?", [b.composition_id])
+    : null;
+  if (b.composition_id && !existing) return c.json({ error: "Not found" }, 404);
+  if (!existing && !b.name) return c.json({ error: "name is required" }, 400);
+
+  // A new spec, or the one this demo was made from (a re-capture).
+  const before = existing ? (demoSpecOf(existing.html) as DemoSpec | null) : null;
+  const spec: DemoSpec | null = b.url && b.steps
+    ? { url: b.url, page: b.page, wait_gone: b.wait_gone, steps: b.steps, allow_writes: b.allow_writes }
+    : before && { url: before.url, page: before.page, wait_gone: before.wait_gone, steps: before.steps, allow_writes: before.allow_writes };
+  if (!spec) return c.json({ error: "url and steps are required, or the composition_id of a demo made here" }, 400);
+  const look: z.infer<z.ZodObject<typeof lookSchema>> = Object.fromEntries(
+    Object.entries(b).filter(([k, v]) => k in lookSchema && v !== undefined),
+  );
+  const notes: string[] = [];
+  if (existing && Object.keys(look).length) {
+    notes.push("Layout and look options shape a new demo only; this one kept its own. Change them in the editor.");
+  }
+
+  let captured: CapturedPage;
+  try {
+    captured = await capturePage(servicesEnv(c.env), {
+      url: spec.url,
+      page: spec.page,
+      waitGone: spec.wait_gone,
+      steps: spec.steps as CaptureStep[],
+      allowWrites: spec.allow_writes === true,
+    });
+  } catch (err) {
+    return captureFailed(c, err);
+  }
+
+  // Each still into the media library, under keys unique to this capture.
+  const id = existing?.id ?? crypto.randomUUID();
+  const prefix = `demo-${id.slice(0, 8)}-${lower8().slice(0, 6)}`;
+  const keep = async (url: string, name: string) => {
+    const res = await fetch(url);
+    if (!res.ok) throw new ClawnifyServicesError(`could not fetch a captured still (${res.status})`, { status: 502 });
+    const data = await res.arrayBuffer();
+    const key = `${prefix}-${name}.png`;
+    await putUpload(key, data, "image/png");
+    await run("INSERT INTO assets (key, name, content_type, size) VALUES (?, ?, 'image/png', ?)", [key, key, data.byteLength]);
+    return key;
+  };
+  const steps: ScreenDemoOptions["steps"] = [];
+  try {
+    for (const [i, s] of captured.steps.entries()) {
+      const asked = spec.steps[i] as { seconds?: number };
+      const frames = [];
+      for (const [j, u] of (s.type?.frame_urls ?? []).entries()) frames.push(`assets/${await keep(u, `${i + 1}-typed-${j + 1}`)}`);
+      steps.push({
+        src: `assets/${await keep(s.image_url, String(i + 1))}`,
+        seconds: asked.seconds ?? defaultSeconds(s, i === captured.steps.length - 1),
+        focus: s.focus,
+        click: s.click,
+        drag: s.drag,
+        connect: s.connect,
+        type: s.type && { box: s.type.box, frames },
+      });
+    }
+  } catch (err) {
+    return captureFailed(c, err);
+  }
+
+  // A layout's clip (new demos only): an uploaded video, played for its own
+  // length, and the steps spread over it unless the spec timed them itself.
+  let layout: ScreenDemoOptions["layout"] = undefined;
+  const l = existing ? undefined : look.layout;
+  if (l && l.kind !== "full") {
+    const asset = await get<Asset & { duration: number | null }>("SELECT * FROM assets WHERE key = ?", [l.clip]);
+    if (!asset || !asset.content_type.startsWith("video/")) {
+      return c.json({ error: "invalid demo", problems: [`layout.clip: no uploaded video with key ${l.clip}`] }, 400);
+    }
+    const seconds = l.seconds ?? asset.duration;
+    if (!seconds) {
+      return c.json({ error: "invalid demo", problems: ["layout.seconds: the clip's length is unknown; pass seconds"] }, 400);
+    }
+    layout = { ...l, clip: `assets/${l.clip}`, seconds };
+    if (spec.steps.every((st) => (st as { seconds?: number }).seconds === undefined)) {
+      const fitted = fitSeconds(steps.map((st) => st.seconds), steps.map((st) => minimumSeconds(st)), seconds);
+      fitted.forEach((sec, i) => (steps[i].seconds = sec));
+    }
+  }
+
+  const opts = { id: `demo-${id.slice(0, 8)}`, steps, page: captured.page, ...look, layout, spec };
+  const problems = screenDemoProblems(opts);
+  if (problems.length) return c.json({ error: "invalid screen demo", problems }, 400);
+  let html: string;
+  if (existing) {
+    // A refresh: new stills in place, everything else as the user left it.
+    const replaced = replaceDemoSteps(existing.html, steps, captured.page);
+    if (!replaced) return c.json({ error: "this composition has no demo stills to replace" }, 400);
+    html = withDemoSpec(replaced, spec);
+  } else {
+    html = screenDemoHtml(opts);
+  }
+
+  if (existing) {
+    await run(
+      `UPDATE compositions SET name = ?, description = ?, html = ?, updated_at = datetime('now') WHERE id = ?`,
+      [b.name ?? existing.name, b.description ?? existing.description, html, id],
+    );
+    // The stills of the capture this one replaces: only keys this endpoint
+    // made for this composition (demo-<id8>-<run>-…), never an upload of the
+    // user's that happens to be named demo-something.
+    const ours = new RegExp(`assets/(demo-${id.slice(0, 8)}-[0-9a-f]{6}-[0-9a-z-]+\\.png)`, "g");
+    const old = new Set([...existing.html.matchAll(ours)].map((m) => m[1]));
+    for (const key of old) {
+      if (html.includes(`assets/${key}`)) continue;
+      await run("DELETE FROM assets WHERE key = ?", [key]);
+      await deleteUpload(key);
+    }
+  } else {
+    await run("INSERT INTO compositions (id, name, description, html, fps) VALUES (?, ?, ?, ?, ?)", [
+      id,
+      b.name,
+      b.description ?? "",
+      html,
+      30,
+    ]);
+  }
+  const row = await get<Composition>("SELECT * FROM compositions WHERE id = ?", [id]);
+  return c.json({ ...(row && (await withLint(row))), warnings: [...captured.warnings, ...notes] }, existing ? 200 : 201);
 });
 
 app.put("/api/compositions/:id", async (c) => {
@@ -316,7 +619,7 @@ function previewDoc(html: string): string {
     var endParam = parseFloat(params.get('end') || '');
     var seekParam = parseFloat(params.get('seek') || '');
     var loopStart = startAt, loopEnd = isFinite(endParam) ? endParam : Infinity;
-    var tls = [], playhead = startAt, playing = params.get('play') === '1', duration = 5, last = 0;
+    var tls = [], clips = [], playhead = startAt, playing = params.get('play') === '1', duration = 5, last = 0;
     // The render length, worked out on the server by the same rule the render
     // uses (shared/length.ts). null: neither the root nor any clip says, so the
     // timelines decide here exactly as they do in the renderer.
@@ -369,15 +672,59 @@ function previewDoc(html: string): string {
           parent.postMessage({ source: 'hf-preview', type: 'select', index: i }, '*');
         });
       });
+      // The renderer mounts a clip only inside [data-start, data-start +
+      // data-duration), so the preview hides it outside that window too.
+      // Video and audio play on their own clock while the preview plays and
+      // are re-seeked only after a real jump (a loop, a scrub), as OpenVideo
+      // does: a seek empties the decoder's buffer, so seeking every frame
+      // stalls them. Paused, they follow the playhead closely, so scrubbing
+      // shows the frame the render will. A <video> is muted, as HyperFrames
+      // renders it; sound comes from an <audio> clip, which plays.
+      clips = [].slice.call(document.querySelectorAll('.clip')).map(function (el) {
+        var media = el.tagName === 'VIDEO' || el.tagName === 'AUDIO';
+        if (media) { try { if (el.tagName === 'VIDEO') el.muted = true; el.pause(); } catch (e) {} }
+        return { el: el, media: media, start: parseFloat(el.getAttribute('data-start')) || 0,
+                 duration: parseFloat(el.getAttribute('data-duration')) };
+      });
       parent.postMessage({ source: 'hf-preview', type: 'meta', duration: duration }, '*');
       last = performance.now();
       requestAnimationFrame(tick);
     });
+    // One media clip against the playhead: \`at\` is where in the clip it
+    // should be. Playing, drift is tolerated (0.75 s video, 0.25 s audio) and
+    // only a jump re-seeks; paused, it follows within 0.05 s. Past the clip's
+    // end it holds the last frame, as the render does.
+    function syncMedia(el, live, at, natural) {
+      try {
+        if (!live) { if (!el.paused) el.pause(); return; }
+        if (at >= natural) {
+          if (!el.paused) el.pause();
+          if (!el.seeking && Math.abs(el.currentTime - (natural - 0.001)) > 0.05) el.currentTime = natural - 0.001;
+          return;
+        }
+        var drift = playing ? (el.tagName === 'AUDIO' ? 0.25 : 0.75) : 0.05;
+        if (!el.seeking && Math.abs(el.currentTime - at) > drift) el.currentTime = at;
+        if (playing && el.paused) { var started = el.play(); if (started && started.catch) started.catch(function () {}); }
+        if (!playing && !el.paused) el.pause();
+      } catch (e) {}
+    }
     function tick(now) {
       requestAnimationFrame(tick);
       var dt = (now - last) / 1000; last = now;
       if (playing) { playhead += dt; if (playhead > loopEnd) playhead = loopStart; }
       tls.forEach(function (tl) { try { tl.time(Math.min(playhead, tl.duration())); } catch (e) {} });
+      // The render's last frame is just before the end, so parking the
+      // playhead at the very end shows that frame, not an empty stage.
+      var t = Math.min(playhead, duration - 0.001);
+      clips.forEach(function (c) {
+        // No data-duration: a media clip runs its own length, anything else
+        // stays to the end.
+        var natural = c.media && isFinite(c.el.duration) ? c.el.duration : Infinity;
+        var span = isFinite(c.duration) ? c.duration : natural;
+        var live = t >= c.start && t < c.start + span;
+        if (live !== c.live) { c.live = live; c.el.style.visibility = live ? '' : 'hidden'; }
+        if (c.media) syncMedia(c.el, live && isFinite(natural), t - c.start, natural);
+      });
       parent.postMessage({ source: 'hf-preview', type: 'time', t: playhead, duration: duration }, '*');
     }`;
   // Media is referenced as a relative `assets/<key>` path (what the renderer
