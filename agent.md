@@ -301,7 +301,8 @@ step (plus one per typed still, and a `<video class="clip demo-motion">` per
 click that had motion), and a script that turns each step's
 `data-start`, focus and action boxes into the camera, cursor and action. So moving or trimming a step on
 the timeline moves its motion with it. A click's motion video is a clip of its
-own: after moving a step, move it too, so it still starts as the cursor presses.
+own; the editor moves it with its step, and when you move a step in the HTML,
+move its motion clip too, so it still starts as the cursor presses.
 Leave that script as it is; change the look around it.
 
 A rebuild (`composition_id`) regenerates the whole composition from the

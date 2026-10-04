@@ -10,7 +10,7 @@ import {
 } from "@clawnify/app/client";
 import { starterHtml } from "./starter";
 import { FORMATS, formatOf, frameOf, ratioLabel, withFrame } from "../shared/format";
-import { applyLayout, type DemoLayout } from "../shared/screen-demo";
+import { applyLayout, motionStart, type DemoLayout } from "../shared/screen-demo";
 import { mediaHtml, mediaId, mediaKind, placeMedia } from "../shared/media";
 import { Timeline, type TimelineEdit } from "./timeline";
 import { compositionLength } from "../shared/length";
@@ -1302,6 +1302,16 @@ function applyClipPatch(html: string, index: number, patch: ClipPatch): string {
       const script = doc.querySelector("script:not([src])");
       if (script && script.textContent) {
         script.textContent = shiftTweenPositions(script.textContent, el.id, patch.start - oldStart);
+      }
+    }
+    // A product demo step's click motion starts at the press, just before the
+    // step ends, so it follows the step when the step moves or is trimmed.
+    if ((patch.start !== undefined || patch.duration !== undefined) && el.classList.contains("demo-step") && el.id) {
+      const motion = doc.getElementById(`${el.id}-motion`);
+      if (motion) {
+        const start = parseFloat(el.getAttribute("data-start") || "0") || 0;
+        const seconds = parseFloat(el.getAttribute("data-duration") || "0") || 0;
+        motion.setAttribute("data-start", String(motionStart(start, seconds)));
       }
     }
     // A stated length is where the render stops. Moving a clip's end past it

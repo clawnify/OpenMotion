@@ -1,7 +1,7 @@
 // Run: pnpm test (Node 22+, no dependencies).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { screenDemoHtml, screenDemoProblems, typingWindow, defaultSeconds, demoSpecOf, fitSeconds, replaceDemoSteps, demoStepTimes, withDemoSpec, applyLayout, demoStepsOf, type ScreenDemoOptions } from "../src/shared/screen-demo.ts";
+import { screenDemoHtml, screenDemoProblems, typingWindow, defaultSeconds, demoSpecOf, fitSeconds, replaceDemoSteps, demoStepTimes, withDemoSpec, applyLayout, demoStepsOf, motionStart, type ScreenDemoOptions } from "../src/shared/screen-demo.ts";
 import { compositionLength } from "../src/shared/length.ts";
 
 const demo: ScreenDemoOptions = {
@@ -297,6 +297,11 @@ test("a click's motion plays from the press, over every still, muted, for its ow
   assert.ok(html.indexOf('id="step2-motion"') < html.indexOf("<!-- /demo-steps -->"));
   assert.match(html, /var at = end - 0\.3, r = reach\(st\.click, at\)/);
   assert.equal(compositionLength(html), 10);
+});
+
+test("a motion starts at the press, never before its step", () => {
+  assert.equal(motionStart(4, 3.5), 7.2);
+  assert.equal(motionStart(4, 0.2), 4);
 });
 
 test("a motion shorter than the wait for the next still holds its last frame until then", () => {

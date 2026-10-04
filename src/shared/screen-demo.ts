@@ -108,6 +108,11 @@ const ACTIONS = ["click", "drag", "connect", "type"] as const;
 /** The kit presses a step's click this long before the step ends. */
 export const PRESS_BEFORE_END = 0.3;
 
+/** When a click step's motion video starts: at the press. */
+export function motionStart(stepStart: number, stepSeconds: number): number {
+  return round(Math.max(stepStart, stepStart + stepSeconds - PRESS_BEFORE_END));
+}
+
 const round = (n: number) => Math.round(n * 1000) / 1000;
 const boxAttr = (b: Box) => [b.x, b.y, b.w, b.h].map(Math.round).join(",");
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
@@ -342,7 +347,7 @@ export function stepsHtml(
       // At least until the next still: a motion shorter than the wait would
       // let this step's own still (the state before the click) flash back.
       // Past its end a video holds its last frame.
-      const at = Math.max(t, t + s.seconds - PRESS_BEFORE_END);
+      const at = motionStart(t, s.seconds);
       const seconds = Math.max(s.motion.seconds, t + s.seconds - at);
       motions.push(
         `      <video id="step${i + 1}-motion" src="${esc(s.motion.src)}" class="clip demo-motion" data-start="${round(at)}" data-duration="${round(seconds)}" data-track-index="1" muted playsinline\n           style="${fill}"></video>`,
