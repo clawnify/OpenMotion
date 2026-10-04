@@ -8,7 +8,8 @@ import {
   useHostChanges,
   useHostNavigate,
 } from "@clawnify/app/client";
-import { SHAPES, starterHtml } from "./starter";
+import { starterHtml } from "./starter";
+import { FORMATS, formatOf, frameOf, ratioLabel, withFrame } from "../shared/format";
 import { Timeline, type TimelineEdit } from "./timeline";
 import { compositionLength } from "../shared/length";
 import type { Lint } from "../server/lint";
@@ -227,12 +228,12 @@ function Gallery({ navigate }: { navigate: (to: string) => void }) {
             </p>
           </div>
           {comps && comps.length > 0 && (
-            <NewVideoMenu align="end" onPick={newVideo}>
+            <ShapeMenu align="end" onPick={newVideo}>
               <button disabled={creating} className={`${hasChat ? btnSecondary : btnPrimary} shrink-0`}>
                 {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
                 New video
               </button>
-            </NewVideoMenu>
+            </ShapeMenu>
           )}
         </div>
 
@@ -261,11 +262,11 @@ function Gallery({ navigate }: { navigate: (to: string) => void }) {
                 : "Start from a working title card and change the words."
             }
             action={
-              <NewVideoMenu onPick={newVideo}>
+              <ShapeMenu onPick={newVideo}>
                 <button disabled={creating} className={hasChat ? btnSecondary : btnPrimary}>
                   <Plus className="w-4 h-4" /> New video
                 </button>
-              </NewVideoMenu>
+              </ShapeMenu>
             }
           />
         ) : (
@@ -299,19 +300,20 @@ function Gallery({ navigate }: { navigate: (to: string) => void }) {
   );
 }
 
-type Shape = (typeof SHAPES)[number];
+type Shape = (typeof FORMATS)[number];
 
 /**
- * Picks the shape a new video starts in. The shape is the one thing that is
- * costly to change later (every position is laid out against the frame), so
- * it is asked once, up front, where the video is made.
+ * Picks a video's format: the shape a new video starts in, or, from the
+ * editor, the one an existing video changes to. `chosen` marks the current one.
  */
-function NewVideoMenu({
+function ShapeMenu({
   align,
+  chosen,
   onPick,
   children,
 }: {
   align?: "start" | "end";
+  chosen?: string;
   onPick: (shape: Shape) => void;
   children: React.ReactNode;
 }) {
@@ -321,7 +323,7 @@ function NewVideoMenu({
       <PopoverTrigger asChild>{children}</PopoverTrigger>
       <PopoverContent align={align}>
         <Command label="Shape">
-          {SHAPES.map((o) => (
+          {FORMATS.map((o) => (
             <CommandItem
               key={o.id}
               value={o.id}
@@ -336,6 +338,7 @@ function NewVideoMenu({
                 <span className="block truncate text-fine text-faint">{o.hint}</span>
               </span>
               <span className="text-fine text-muted tabular-nums">{o.ratio}</span>
+              <Check className={`w-4 h-4 shrink-0 ${o.id === chosen ? "" : "invisible"}`} aria-hidden />
             </CommandItem>
           ))}
         </Command>
@@ -728,6 +731,32 @@ function Editor({
     // persist() records pendingBefore; history was moved by hand above.
   }
 
+  const frame = frameOf(html);
+  const currentFormat = frame ? formatOf(frame.width, frame.height) : undefined;
+
+  /**
+   * Change the video's format. Only the canvas changes: a product demo fits
+   * itself to it when it plays; anything else is free HTML whose layout can't
+   * be moved mechanically, so the AI is asked to re-lay it out (a draft the
+   * user sends). One undo step either way.
+   */
+  function changeFormat(f: Shape) {
+    if (!frame || (frame.width === f.width && frame.height === f.height)) return;
+    const from = currentFormat ? `${currentFormat.name} ${currentFormat.ratio}` : ratioLabel(frame.width, frame.height);
+    if (pendingBefore.current === null) pendingBefore.current = html;
+    const next = withFrame(html, f.width, f.height);
+    setHtml(next);
+    persist(next, 0);
+    const fitsItself = /class="clip demo-step"/.test(next);
+    if (!fitsItself && hasChat && parseClips(next).clips.length > 0) {
+      openChat(
+        `In the OpenMotion video "${name}": I changed its format from ${from} to ${f.name} ${f.ratio} ` +
+          `(${f.width}×${f.height}). Re-lay out every element for the new frame so nothing is cut off ` +
+          `or crowded; keep the words, timing and motion.`,
+      );
+    }
+  }
+
   async function save() {
     setSaving(true);
     try {
@@ -808,11 +837,33 @@ function Editor({
                   onClose={() => setSelectedClip(null)}
                 />
               ) : (
-                <div className="px-4 py-4">
-                  <div className="text-label text-muted mb-1">Inspector</div>
-                  <p className="text-body-sm text-muted">
-                    Select a clip, in the timeline or in the video, to edit it.
-                  </p>
+                <div className="px-4 py-4 space-y-5">
+                  {frame && (
+                    <div>
+                      <div className="text-label text-muted mb-1.5">Format</div>
+                      <ShapeMenu chosen={currentFormat?.id} onPick={changeFormat}>
+                        <button className={`${btnSecondary} w-full justify-between`}>
+                          <span className="flex items-center gap-2 min-w-0">
+                            <ShapeGlyph width={frame.width} height={frame.height} />
+                            <span className="truncate">
+                              {currentFormat ? currentFormat.name : "Custom"}{" "}
+                              <span className="text-muted tabular-nums">{ratioLabel(frame.width, frame.height)}</span>
+                            </span>
+                          </span>
+                          <ChevronDown className="w-4 h-4 shrink-0" />
+                        </button>
+                      </ShapeMenu>
+                      <p className="text-fine text-faint mt-1.5 tabular-nums">
+                        {frame.width} × {frame.height}
+                      </p>
+                    </div>
+                  )}
+                  <div>
+                    <div className="text-label text-muted mb-1">Inspector</div>
+                    <p className="text-body-sm text-muted">
+                      Select a clip, in the timeline or in the video, to edit it.
+                    </p>
+                  </div>
                 </div>
               )}
             </Panel>

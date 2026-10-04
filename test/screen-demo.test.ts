@@ -33,24 +33,21 @@ test("the timeline is registered under the composition's id", () => {
   assert.match(screenDemoHtml(demo), /window\.__timelines\[root\.dataset\.compositionId\] = tl/);
 });
 
-test("by default the app fills the video, with no window, shadow or margin", () => {
+test("by default the app fills the video: no window, shadow or margin; the kit fits it at play time", () => {
   const html = screenDemoHtml(demo);
-  assert.match(html, /id="frame" style="position:absolute;left:0px;top:0px;width:1920px;height:1080px;overflow:hidden;background:#fff;">/);
-  assert.match(html, /data-page-scale="1.2"/);
-  assert.doesNotMatch(html.match(/id="frame" style="[^"]*"/)![0], /box-shadow|border-radius/);
-  // A vertical video letterboxes the landscape app, centred.
-  const vertical = screenDemoHtml({ ...demo, frame: { width: 1080, height: 1920 } });
-  assert.match(vertical, /left:0px;top:656px;width:1080px;height:608px/);
+  const frame = html.match(/id="frame" style="[^"]*"/)![0];
+  assert.doesNotMatch(frame, /box-shadow|border-radius|left:|width:/);
+  assert.doesNotMatch(html, /data-floating="1"/);
+  assert.match(html, /data-width="1920" data-height="1080"/);
+  assert.match(html, /frame\.style\.left = WX/);
 });
 
-test("floating: a rounded window with a shadow, 1:1 with a margin, scaled down to fit a small frame", () => {
+test("floating: a rounded window with a shadow and background around it", () => {
   const html = screenDemoHtml({ ...demo, floating: true });
-  assert.match(html, /id="frame" style="position:absolute;left:160px;top:90px;width:1600px;height:900px;overflow:hidden;background:#fff;border-radius:14px;box-shadow/);
-  assert.match(html, /data-page-scale="1"/);
+  assert.match(html, /data-floating="1"/);
+  assert.match(html.match(/id="frame" style="[^"]*"/)![0], /border-radius:14px;box-shadow/);
   assert.match(html, /linear-gradient/);
-  const vertical = screenDemoHtml({ ...demo, floating: true, frame: { width: 1080, height: 1920 } });
-  assert.match(vertical, /data-page-scale="0.608"/);
-  assert.match(vertical, /width:972px;height:547px/);
+  assert.match(screenDemoHtml({ ...demo, frame: { width: 1080, height: 1920 } }), /data-width="1080" data-height="1920"/);
 });
 
 test("valid steps have no problems", () => {

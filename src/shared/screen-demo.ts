@@ -147,16 +147,10 @@ export function typingWindow(start: number, seconds: number): [number, number] {
 export function screenDemoHtml(opts: ScreenDemoOptions): string {
   const { width: pw, height: ph } = opts.page ?? { width: 1600, height: 900 };
   const { width: fw, height: fh } = opts.frame ?? { width: 1920, height: 1080 };
-  // By default the page fills the video (letterboxed if the shapes differ;
-  // the stills are 2x, so scaling up stays sharp). Floating, it sits at 1:1
-  // with a margin, scaled down only if the frame is too small for that.
-  const fitScale = opts.floating
-    ? Math.min(1, (fw * 0.9) / pw, (fh * 0.9) / ph)
-    : Math.min(fw / pw, fh / ph);
-  const ww = Math.round(pw * fitScale), wh = Math.round(ph * fitScale);
-  const wx = Math.round((fw - ww) / 2), wy = Math.round((fh - wh) / 2);
   const accent = opts.accent ?? "224,82,104";
   const bg = opts.background ?? (opts.floating ? "linear-gradient(135deg,#f6d5dc,#dfe3f7)" : "#000");
+  // Where the window sits is worked out by the kit from the root's size when
+  // it plays (see KIT), so changing the video's format refits a demo exactly.
   const windowLook = opts.floating
     ? "border-radius:14px;box-shadow:0 30px 80px rgba(20,20,60,.25),0 0 0 1px rgba(0,0,0,.06);"
     : "";
@@ -197,10 +191,10 @@ export function screenDemoHtml(opts: ScreenDemoOptions): string {
 
   return `<div id="root" data-composition-id="${opts.id}" data-start="0" data-duration="${round(t)}" data-width="${fw}" data-height="${fh}"
      style="width:${fw}px;height:${fh}px;position:relative;overflow:hidden;background:${esc(bg)}">
-  <div id="cam" style="position:absolute;left:0;top:0;width:${fw}px;height:${fh}px;transform-origin:0 0">
-    <div id="frame" style="position:absolute;left:${wx}px;top:${wy}px;width:${ww}px;height:${wh}px;overflow:hidden;background:#fff;${windowLook}">
-    <div id="win" data-page-width="${pw}" data-page-height="${ph}" data-page-scale="${round(fitScale)}" data-accent="${accent}"${opts.tilt ? ` data-tilt="1"` : ""}
-         style="position:absolute;left:0;top:0;width:${pw}px;height:${ph}px;transform-origin:0 0;transform:scale(${round(fitScale)})">
+  <div id="cam" style="position:absolute;left:0;top:0;width:100%;height:100%;transform-origin:0 0">
+    <div id="frame" style="position:absolute;overflow:hidden;background:#fff;${windowLook}">
+    <div id="win" data-page-width="${pw}" data-page-height="${ph}" data-accent="${accent}"${opts.floating ? ` data-floating="1"` : ""}${opts.tilt ? ` data-tilt="1"` : ""}
+         style="position:absolute;left:0;top:0;width:${pw}px;height:${ph}px;transform-origin:0 0">
 ${imgs.join("\n")}
       <div id="ripple" style="position:absolute;left:0;top:0;width:56px;height:56px;margin:-28px 0 0 -28px;border-radius:50%;background:rgba(${accent},.35);border:2px solid rgba(${accent},.8);opacity:0"></div>
       <svg id="cursor" width="30" height="30" viewBox="0 0 24 24" style="position:absolute;left:0;top:0;overflow:visible;filter:drop-shadow(0 2px 3px rgba(0,0,0,.35))">
@@ -234,8 +228,14 @@ const KIT = `    // Screen-demo kit: builds the camera, cursor and actions from 
       var win = document.getElementById("win"), frame = document.getElementById("frame");
       var root = win.closest("[data-composition-id]");
       var FW = +root.dataset.width, FH = +root.dataset.height, LEN = +root.dataset.duration;
-      var k = +win.dataset.pageScale || 1, PW = +win.dataset.pageWidth, PH = +win.dataset.pageHeight;
-      var WX = frame.offsetLeft, WY = frame.offsetTop, accent = win.dataset.accent || "224,82,104";
+      var PW = +win.dataset.pageWidth, PH = +win.dataset.pageHeight, accent = win.dataset.accent || "224,82,104";
+      // Fit the page to the video: edge to edge (letterboxed if the shapes
+      // differ), or floating at 1:1 with a margin, smaller only if it must be.
+      var k = win.dataset.floating ? Math.min(1, 0.9 * FW / PW, 0.9 * FH / PH) : Math.min(FW / PW, FH / PH);
+      var WX = Math.round((FW - PW * k) / 2), WY = Math.round((FH - PH * k) / 2);
+      frame.style.left = WX + "px"; frame.style.top = WY + "px";
+      frame.style.width = Math.round(PW * k) + "px"; frame.style.height = Math.round(PH * k) + "px";
+      win.style.transform = "scale(" + k + ")";
       var box = function (s) { if (!s) return null; var v = s.split(",").map(Number); return { x: v[0], y: v[1], w: v[2], h: v[3] }; };
       var mid = function (b) { return { x: b.x + b.w / 2, y: b.y + b.h / 2 }; };
       var span = function (a, b) { var x = Math.min(a.x, b.x), y = Math.min(a.y, b.y); return { x: x, y: y, w: Math.max(a.x + a.w, b.x + b.w) - x, h: Math.max(a.y + a.h, b.y + b.h) - y }; };

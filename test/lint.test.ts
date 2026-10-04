@@ -2,12 +2,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { lintComposition } from "../src/server/lint.ts";
-import { SHAPES, starterHtml } from "../src/client/starter.ts";
+import { starterHtml } from "../src/client/starter.ts";
+import { FORMATS } from "../src/shared/format.ts";
 
 const STARTER = starterHtml(1920, 1080);
 
 test("every starter lints clean", async () => {
-  for (const s of SHAPES) {
+  for (const s of FORMATS) {
     const lint = await lintComposition(starterHtml(s.width, s.height));
     assert.deepEqual(lint, { errors: 0, warnings: 0, findings: [] }, s.id);
   }
