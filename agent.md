@@ -119,8 +119,32 @@ HTML by path: `assets/<key>`. Reference it as `<img src="assets/logo.png">` or
 the assets your HTML actually references — you don't attach them manually.
 
 To list what's available: `GET /api/assets` → `[{ key, name, content_type }]`.
-Use the exact `key` in `assets/<key>`. (Users upload via the Media tab; you can
-also upload programmatically with a multipart `POST /api/assets`.)
+Use the exact `key` in `assets/<key>`. You can upload too: a multipart
+`POST /api/assets` with the file in the field `file` (and `duration` in seconds
+for a video or sound, when you know it). The key is made from the file name,
+lowercased and de-duplicated, so reference the `key` the response returns, not
+the name you sent.
+
+When the user attaches an image in the dashboard chat ("put my face at the
+bottom"), upload it with `call_app_api`'s `files`; the bytes go straight to the
+app and never pass through you:
+
+```
+call_app_api { method: "POST", path: "/api/assets",
+               files: [{ field: "file", attachment: 1, filename: "face.jpg" }] }
+```
+
+`attachment` counts the images attached in this chat, newest first (1 = the
+latest). Only the dashboard chat has `files`, and only for images (JPEG, PNG,
+WebP, GIF, 5 MB each, up to 5 per call). A video or a sound has to be uploaded
+by the user in the editor's Media sidebar.
+
+Users upload in the editor's **Media** sidebar and click an item to put it in
+the video at the playhead. That adds a clip on new lanes above the others,
+drawn on top, with an id `media-<key>`: an `<img>` centred at up to 60% of the
+frame (3 s), or a muted `<video>` filling the frame plus an `<audio>` of the
+same file one lane up (the video's own length). When the user then asks to place it ("my face at the bottom", "logo in
+the corner"), restyle that element; don't add a second copy.
 
 Every clip is on screen only inside its window: it appears at `data-start`
 and leaves `data-duration` seconds later. A `<video>` or `<audio>` clip plays

@@ -476,8 +476,10 @@ app.delete("/api/assets/:id", async (c) => {
 
 // Serve any R2 object (uploaded media + rendered videos). Range-aware: media
 // elements seek with byte ranges, and metadata probing of moov-at-end files
-// is unusably slow without 206 responses.
-app.get("/api/uploads/:key", async (c) => {
+// is unusably slow without 206 responses. A key can hold a slash (exports
+// are renders/<name>.mp4), and the preview rewrites assets/<key> to this path
+// unencoded, so the key is the whole rest of the path.
+app.get("/api/uploads/:key{.+}", async (c) => {
   const key = c.req.param("key");
   const range = c.req.header("Range");
   const m = range?.match(/^bytes=(\d+)-(\d*)$/);
