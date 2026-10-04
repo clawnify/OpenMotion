@@ -761,7 +761,7 @@ function Editor({
    * so it can only show an edit after the save. Debounced so typing stays
    * smooth; the playhead is restored afterwards so an edit never jumps the time.
    */
-  function persist(next: string, delay = 350) {
+  function persist(next: string, delay = 350, playhead?: number) {
     clearTimeout(reloadTimer.current);
     reloadTimer.current = setTimeout(async () => {
       const before = pendingBefore.current;
@@ -774,7 +774,7 @@ function Editor({
       } finally {
         setSaving(false);
       }
-      restoreRef.current = timeRef.current;
+      restoreRef.current = playhead ?? timeRef.current;
       setPreviewKey((k) => k + 1);
     }, delay);
   }
@@ -839,15 +839,17 @@ function Editor({
       // Last of the visible elements: on top of everything, scripts stay last.
       const script = Array.from(root.children).find((el) => el.tagName === "SCRIPT");
       for (const el of Array.from(tpl.content.children)) {
-        root.insertBefore(doc.createTextNode("\n  "), script ?? null);
         root.insertBefore(el, script ?? null);
+        root.insertBefore(doc.createTextNode("\n  "), script ?? null);
       }
-      if (script) root.insertBefore(doc.createTextNode("\n  "), script);
       if (place.length) root.setAttribute("data-duration", String(place.length));
       const next = root.outerHTML;
       if (pendingBefore.current === null) pendingBefore.current = html;
       setHtml(next);
-      persist(next, 0);
+      // Back to the new clip's start once the preview reloads: selecting it
+      // sets a loop window the old preview, still at the old length, clamps to
+      // its end before then.
+      persist(next, 0, place.start);
       // The visual (or the sound, for audio) is the first clip it added.
       const added = parseClips(next).clips.find((c) => c.track === place.track && c.start === place.start);
       setSelectedClip(added ? added.index : null);
@@ -1677,7 +1679,8 @@ function MediaSidebar({ changes, onAdd }: { changes: number; onAdd: (a: Asset) =
                   {a.content_type.startsWith("image/") ? (
                     <img src={`/api/uploads/${a.key}`} alt="" className="w-full h-full object-cover" />
                   ) : a.content_type.startsWith("video/") ? (
-                    <video src={`/api/uploads/${a.key}#t=0.1`} preload="metadata" muted className="w-full h-full object-cover" />
+                    // Halfway in, as posterTime does: an export fades in, so its first frame is empty.
+                    <video src={`/api/uploads/${a.key}#t=${a.duration ? (a.duration / 2).toFixed(1) : 0.1}`} preload="metadata" muted className="w-full h-full object-cover" />
                   ) : a.content_type.startsWith("audio/") ? (
                     <Music className="w-6 h-6 text-track-audio" />
                   ) : (
