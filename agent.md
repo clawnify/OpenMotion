@@ -25,7 +25,9 @@ The app opens the chat with a draft the user sends:
 
 - From the video list: `Make a new video in OpenMotion: <brief>`. Create the
   composition and open it for them at the app path `/<composition id>`. Export
-  only if they asked for a file (see Exporting).
+  only if they asked for a file (see Exporting). If the brief names a link to
+  a web app and asks for a demo, walkthrough or screen recording of it, follow
+  "Product demos of a web app".
 - From the editor: `In the OpenMotion video "<name>": …`, sometimes naming a
   clip and its start time. The chat context carries the open video as a record
   of type `composition` with its `id`. Change that composition with
@@ -153,55 +155,64 @@ viewer at (`focus`), and the one action that reaches the next state:
 
 The last step usually has no action: 2 to 3 s to look at the result.
 
-**If you can run Node and Chrome, use the capture script** in this repo. Write
-a spec that names elements by what they say, so it still works after the app's
-layout changes:
+**Make it from the link, in this app.** You need no browser of your own: the
+app walks the page in a real browser on Clawnify's capture service.
+
+1. **Look at the page.** `POST /api/demos/outline { url }` answers with
+   `image_url` (a screenshot of the page) and `controls`: each visible control
+   with its `text`, a `selector`, its `box`, and for controls with no text of
+   their own (a node's handle) the `context` they sit in and a `within`
+   selector for that container. Pass `wait_gone: "Loading"` if the page shows
+   a loading message first.
+2. **Plan 3 to 6 steps** from what the user wants shown, naming elements by
+   what they say. To see where a step leads before committing to it, outline
+   again with the steps so far: `{ url, steps: [...] }` returns the page those
+   steps end on.
+3. **Make it**: `POST /api/demos { name, url, steps, wait_gone? }`. The app
+   captures every state for real, puts the stills in the Media library and
+   answers with the composition (and `lint`, and `warnings` for any click
+   target that matched several controls). Open it for the user at
+   `/<composition id>`.
+
+A step is `{ focus?, seconds?, <one action> }`:
 
 ```json
-{ "name": "Studio: add a prompt and connect it",
-  "url": "https://app.clawnify.com/demo/workspaces/studio?at=%2Fworkflows%2F5a1e0000-0000-4000-8000-000000000001",
-  "wait_gone": "Loading",
-  "steps": [
-    { "drag": { "from": { "text": "Prompt", "selector": "[draggable=true]" },
-                "to": { "x": 700, "y": 560 } }, "seconds": 3.4 },
-    { "type": { "into": { "selector": "[contenteditable=true]",
-                          "within": { "text": "PROMPT 2", "closest": ".react-flow__node" } },
-                "text": "A neon city skyline at dusk, retro poster style", "frames": 12 },
-      "seconds": 4.6 },
-    { "connect": { "from": { "selector": ".react-flow__handle.source",
-                             "within": { "text": "PROMPT 2", "closest": ".react-flow__node" } },
-                   "to": { "selector": ".react-flow__handle.target",
-                           "within": { "text": "GENERATE IMAGE", "closest": ".react-flow__node" } } },
-      "seconds": 3.4 },
-    { "seconds": 3 } ] }
+[
+  { "drag": { "from": { "text": "Prompt", "selector": "[draggable=true]" },
+              "to": { "x": 700, "y": 560 } } },
+  { "type": { "into": { "selector": "[contenteditable=true]",
+                        "within": { "text": "PROMPT 2", "closest": ".react-flow__node" } },
+              "text": "A neon city skyline at dusk, retro poster style" } },
+  { "connect": { "from": { "selector": ".react-flow__handle-right",
+                           "within": { "text": "PROMPT 2", "closest": ".group.flow-node" } },
+                 "to": { "selector": "[data-handleid=\"prompt\"]" } } },
+  { "focus": { "text": "Outputs" }, "click": { "text": "Outputs" } },
+  {}
+]
 ```
 
-```sh
-CHROME_PATH=/path/to/chrome pnpm demo:capture spec.json \
-  --api <this app's API base> --header "Authorization: Bearer …" [--composition <id>]
-```
+A locator is `text` (the smallest visible element containing it; for a click
+or a drag, controls win), `selector`, or both, plus `closest` to grow the match
+to an ancestor such as its card and `within` to search only inside another
+locator's match. A drop target can be a page point `{ "x", "y" }`. `seconds`
+defaults to the action's length above. The browser is signed out and starts
+fresh each time, so demo and claim workspaces work, and pages behind a login
+do not.
 
-A locator is `text` (the smallest visible element containing it, in any frame;
-for a click or a drag, controls win), `selector`, or both, plus `closest` to
-grow the match to an ancestor such as its card and `within` to search only
-inside another locator's match (one node's handle). A drop target can be a
-page point `{ "x", "y" }`. The script screenshots each state at 1600×900,
-scale 2, really performs the action (a press-move-release for `drag` and
-`connect`, real keys for `type`, with a still after each chunk of text),
-uploads the stills and calls the endpoint below. With `--composition` it
-rebuilds that video in place: run the same spec again whenever the app
-changes. It warns when a click target matches several controls: add a
-selector.
+**Never click** anything that commits, buys, sends, deletes, signs in or
+claims (a "Claim this workspace" or "Use this app" button, a checkout, a send
+button): the video should show the product, and some of those act for real.
 
-**Otherwise capture by hand** in your own browser: viewport 1600×900 at device
-scale factor 2; per step, wait until the page settles, take a viewport
-screenshot, record boxes as `{x,y,w,h}` page pixels
-(`getBoundingClientRect()`; inside an iframe, add the iframe's own `x`/`y`),
-then really perform the action (for `type`, a screenshot after each few
-characters). Upload each still with a multipart `POST /api/assets` (field
-`file`) and keep the `key` it returns.
+**Refresh a demo** after the app changed: `POST /api/demos { composition_id }`
+captures it again from the steps it was made with (they are kept inside the
+composition) and replaces its stills. Add `floating`, `tilt` or `accent` to
+change the look at the same time.
 
-**Then build the video** with `POST /api/compositions/screen-demo`:
+**Already have stills?** (taken by hand: viewport 1600×900 at scale 2, boxes as
+`{x,y,w,h}` page pixels.) Upload each with a multipart `POST /api/assets`
+(field `file`), then build the video from them:
+
+`POST /api/compositions/screen-demo`:
 
 ```json
 { "name": "Studio: from prompt to outputs",
@@ -247,7 +258,9 @@ captions only to a demo you will not rebuild.
 | GET  | `/api/compositions` | List compositions |
 | GET  | `/api/compositions/{id}` | Get one (includes `html` and `lint`) |
 | POST | `/api/compositions` | Create `{ name, description?, html?, fps? }` → the row with `lint` |
-| POST | `/api/compositions/screen-demo` | Create or rebuild a product demo from captured stills (see above) |
+| POST | `/api/demos/outline` | A page's screenshot and visible controls, after optional steps (plan a demo) |
+| POST | `/api/demos` | Make a product demo of a link, or refresh one (`composition_id`) |
+| POST | `/api/compositions/screen-demo` | Build a product demo from stills you already have |
 | PUT  | `/api/compositions/{id}` | Update any of `name/description/html/fps` → the row with `lint` |
 | DELETE | `/api/compositions/{id}` | Delete |
 | GET  | `/api/assets` | List uploaded media |

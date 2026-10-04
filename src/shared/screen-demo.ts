@@ -65,6 +65,11 @@ export interface ScreenDemoOptions {
   accent?: string;
   /** Open with the app tilting in from 3D, and close with it tilting away. */
   tilt?: boolean;
+  /**
+   * The capture spec this demo was made from, kept inside the composition so
+   * it can be captured again when the app changes (see demoSpecOf).
+   */
+  spec?: unknown;
 }
 
 /** The shortest step each action can play in: get there, then act. */
@@ -111,6 +116,27 @@ export function screenDemoProblems(opts: ScreenDemoOptions): string[] {
     }
   });
   return out;
+}
+
+/** How long a step lasts when the spec does not say: long enough for its action. */
+export function defaultSeconds(step: { click?: unknown; drag?: unknown; connect?: unknown; type?: unknown }, last: boolean): number {
+  if (step.type) return 4.5;
+  if (step.drag || step.connect) return 3.4;
+  if (step.click) return 3.5;
+  return last ? 3 : 2.5;
+}
+
+const SPEC_TAG = /<script type="application\/json" id="demo-spec">([\s\S]*?)<\/script>/;
+
+/** The capture spec a demo composition carries, or null. */
+export function demoSpecOf(html: string): unknown {
+  const m = SPEC_TAG.exec(html);
+  if (!m) return null;
+  try {
+    return JSON.parse(m[1]);
+  } catch {
+    return null;
+  }
 }
 
 /** When typing starts and ends inside a step: after the cursor has got there and clicked. */
@@ -183,7 +209,7 @@ ${imgs.join("\n")}
     </div>
     </div>
   </div>
-  <script src="https://cdn.jsdelivr.net/npm/gsap@3/dist/gsap.min.js"></script>
+${opts.spec === undefined ? "" : `  <script type="application/json" id="demo-spec">${JSON.stringify(opts.spec).replace(/</g, "\\u003c")}</script>\n`}  <script src="https://cdn.jsdelivr.net/npm/gsap@3/dist/gsap.min.js"></script>
   <script>
 ${KIT}
   </script>

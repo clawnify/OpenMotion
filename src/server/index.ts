@@ -12,7 +12,8 @@ import { renderComposition } from "./render";
 import { compositionLength, withLength } from "../shared/length";
 import { lintComposition } from "./lint";
 import { z } from "zod";
-import { screenDemoHtml, screenDemoProblems } from "../shared/screen-demo";
+import { screenDemoHtml, screenDemoProblems, defaultSeconds, demoSpecOf } from "../shared/screen-demo";
+import { capturePage, outlinePage, ClawnifyServicesError, type CaptureStep, type CapturedPage } from "@clawnify/services";
 
 type Bindings = {
   DB: D1Database;
@@ -158,6 +159,156 @@ app.post("/api/compositions/screen-demo", async (c) => {
   }
   const row = await get<Composition>("SELECT * FROM compositions WHERE id = ?", [id]);
   return c.json(row && (await withLint(row)), existing ? 200 : 201);
+});
+
+// ── Product demos from a link ────────────────────────────────────────
+// The AI in the app plans a demo by looking at the page (outline: one
+// screenshot and its visible controls after any steps so far), then makes it
+// in one call: the capture service walks the page for real (capture.ts), the
+// stills land in the media library and the composition is built with the
+// screen-demo kit. The spec stays inside the composition, so the same call
+// with only composition_id captures the demo again after the app changes.
+
+const CAPTURE_OFF = { error: "Capture service not configured (missing CLAWNIFY_TOKEN). Captures run on deployed apps." };
+
+const servicesEnv = (env: Bindings) => ({ CLAWNIFY_TOKEN: env.CLAWNIFY_TOKEN, CLAWNIFY_SERVICES_URL: env.SERVICES_URL });
+
+/** A capture that failed: the spec's fault (400) or the service's (502). */
+function captureFailed(c: { json: (b: unknown, s: 400 | 502) => Response }, err: unknown) {
+  if (!(err instanceof ClawnifyServicesError)) throw err;
+  const problems = (err.body?.problems as string[] | undefined) ?? undefined;
+  return c.json({ error: err.message, ...(problems ? { problems } : {}) }, err.status === 422 ? 400 : 502);
+}
+
+app.post("/api/demos/outline", async (c) => {
+  if (!c.env.CLAWNIFY_TOKEN) return c.json(CAPTURE_OFF, 503);
+  const b = await c.req.json<{ url?: string; page?: { width: number; height: number }; wait_gone?: string; steps?: CaptureStep[] }>().catch(() => null);
+  if (!b?.url) return c.json({ error: "url is required" }, 400);
+  try {
+    return c.json(await outlinePage(servicesEnv(c.env), { url: b.url, page: b.page, waitGone: b.wait_gone, steps: b.steps }));
+  } catch (err) {
+    return captureFailed(c, err);
+  }
+});
+
+const lookSchema = {
+  frame: sizeSchema.optional(),
+  floating: z.boolean().optional(),
+  tilt: z.boolean().optional(),
+  accent: z.string().optional(),
+  background: z.string().max(300).optional(),
+};
+const demoSchema = z.object({
+  composition_id: z.string().optional(),
+  name: z.string().trim().min(1).optional(),
+  description: z.string().optional(),
+  url: z.string().optional(),
+  page: sizeSchema.optional(),
+  wait_gone: z.string().optional(),
+  steps: z.array(z.record(z.unknown())).min(1).max(12).optional(),
+  ...lookSchema,
+});
+type DemoSpec = {
+  url: string;
+  page?: { width: number; height: number };
+  wait_gone?: string;
+  steps: Record<string, unknown>[];
+  look?: z.infer<z.ZodObject<typeof lookSchema>>;
+};
+
+app.post("/api/demos", async (c) => {
+  if (!c.env.CLAWNIFY_TOKEN) return c.json(CAPTURE_OFF, 503);
+  const parsed = demoSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) {
+    return c.json({ error: "invalid demo", problems: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) }, 400);
+  }
+  const b = parsed.data;
+  const existing = b.composition_id
+    ? await get<Composition>("SELECT * FROM compositions WHERE id = ?", [b.composition_id])
+    : null;
+  if (b.composition_id && !existing) return c.json({ error: "Not found" }, 404);
+  if (!existing && !b.name) return c.json({ error: "name is required" }, 400);
+
+  // A new spec, or the one this demo was made from (a re-capture).
+  const before = existing ? (demoSpecOf(existing.html) as DemoSpec | null) : null;
+  const look = { ...before?.look, ...Object.fromEntries(Object.entries(b).filter(([k, v]) => k in lookSchema && v !== undefined)) };
+  const spec: DemoSpec | null = b.url && b.steps
+    ? { url: b.url, page: b.page, wait_gone: b.wait_gone, steps: b.steps, look }
+    : before && { ...before, look };
+  if (!spec) return c.json({ error: "url and steps are required, or the composition_id of a demo made here" }, 400);
+
+  let captured: CapturedPage;
+  try {
+    captured = await capturePage(servicesEnv(c.env), {
+      url: spec.url,
+      page: spec.page,
+      waitGone: spec.wait_gone,
+      steps: spec.steps as CaptureStep[],
+    });
+  } catch (err) {
+    return captureFailed(c, err);
+  }
+
+  // Each still into the media library, under keys unique to this capture.
+  const id = existing?.id ?? crypto.randomUUID();
+  const prefix = `demo-${id.slice(0, 8)}-${lower8().slice(0, 6)}`;
+  const keep = async (url: string, name: string) => {
+    const res = await fetch(url);
+    if (!res.ok) throw new ClawnifyServicesError(`could not fetch a captured still (${res.status})`, { status: 502 });
+    const data = await res.arrayBuffer();
+    const key = `${prefix}-${name}.png`;
+    await putUpload(key, data, "image/png");
+    await run("INSERT INTO assets (key, name, content_type, size) VALUES (?, ?, 'image/png', ?)", [key, key, data.byteLength]);
+    return key;
+  };
+  const steps = [];
+  try {
+    for (const [i, s] of captured.steps.entries()) {
+      const asked = spec.steps[i] as { seconds?: number };
+      const frames = [];
+      for (const [j, u] of (s.type?.frame_urls ?? []).entries()) frames.push(`assets/${await keep(u, `${i + 1}-typed-${j + 1}`)}`);
+      steps.push({
+        src: `assets/${await keep(s.image_url, String(i + 1))}`,
+        seconds: asked.seconds ?? defaultSeconds(s, i === captured.steps.length - 1),
+        focus: s.focus,
+        click: s.click,
+        drag: s.drag,
+        connect: s.connect,
+        type: s.type && { box: s.type.box, frames },
+      });
+    }
+  } catch (err) {
+    return captureFailed(c, err);
+  }
+
+  const opts = { id: `demo-${id.slice(0, 8)}`, steps, page: captured.page, ...look, spec };
+  const problems = screenDemoProblems(opts);
+  if (problems.length) return c.json({ error: "invalid screen demo", problems }, 400);
+  const html = screenDemoHtml(opts);
+
+  if (existing) {
+    await run(
+      `UPDATE compositions SET name = ?, description = ?, html = ?, updated_at = datetime('now') WHERE id = ?`,
+      [b.name ?? existing.name, b.description ?? existing.description, html, id],
+    );
+    // The stills of the capture this one replaces.
+    const old = new Set([...existing.html.matchAll(/assets\/(demo-[a-z0-9-]+\.png)/g)].map((m) => m[1]));
+    for (const key of old) {
+      if (html.includes(`assets/${key}`)) continue;
+      await run("DELETE FROM assets WHERE key = ?", [key]);
+      await deleteUpload(key);
+    }
+  } else {
+    await run("INSERT INTO compositions (id, name, description, html, fps) VALUES (?, ?, ?, ?, ?)", [
+      id,
+      b.name,
+      b.description ?? "",
+      html,
+      30,
+    ]);
+  }
+  const row = await get<Composition>("SELECT * FROM compositions WHERE id = ?", [id]);
+  return c.json({ ...(row && (await withLint(row))), warnings: captured.warnings }, existing ? 200 : 201);
 });
 
 app.put("/api/compositions/:id", async (c) => {

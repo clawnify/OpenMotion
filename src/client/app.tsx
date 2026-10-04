@@ -386,7 +386,7 @@ function DescribeVideo() {
         rows={2}
         maxLength={1800}
         aria-label="Describe a video"
-        placeholder="Describe a video: what it is for, how long, vertical or landscape, the mood. A 15-second vertical teaser for our launch, bold type, fast cuts."
+        placeholder="Describe a video: what it is for, how long, vertical or landscape, the mood. Or paste a link to a web app and say what the demo should show."
         className="field resize-none"
       />
       <div className="flex items-center justify-between gap-3 mt-2">

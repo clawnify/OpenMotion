@@ -1,7 +1,7 @@
 // Run: pnpm test (Node 22+, no dependencies).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { screenDemoHtml, screenDemoProblems, typingWindow, type ScreenDemoOptions } from "../src/shared/screen-demo.ts";
+import { screenDemoHtml, screenDemoProblems, typingWindow, defaultSeconds, demoSpecOf, type ScreenDemoOptions } from "../src/shared/screen-demo.ts";
 import { compositionLength } from "../src/shared/length.ts";
 
 const demo: ScreenDemoOptions = {
@@ -139,4 +139,20 @@ test("the cursor's randomness is seeded: no Math.random in the composition", () 
 test("the 3D open and close is off unless asked for", () => {
   assert.doesNotMatch(screenDemoHtml(demo), /data-tilt="1"/);
   assert.match(screenDemoHtml({ ...demo, tilt: true }), /data-accent="224,82,104" data-tilt="1"/);
+});
+
+test("the capture spec rides inside the composition and comes back out intact", () => {
+  const spec = { url: "https://example.com/a?b=1", steps: [{ type: { into: { text: "</script><b>" }, text: "x" } }], look: { tilt: true } };
+  const html = screenDemoHtml({ ...demo, spec });
+  assert.doesNotMatch(html, /<\/script><b>/); // cannot close its own tag
+  assert.deepEqual(demoSpecOf(html), spec);
+  assert.equal(demoSpecOf(screenDemoHtml(demo)), null);
+});
+
+test("a step lasts long enough for its action unless the spec says", () => {
+  assert.equal(defaultSeconds({ type: {} }, false), 4.5);
+  assert.equal(defaultSeconds({ drag: {} }, false), 3.4);
+  assert.equal(defaultSeconds({ click: {} }, false), 3.5);
+  assert.equal(defaultSeconds({}, true), 3);
+  assert.equal(defaultSeconds({}, false), 2.5);
 });
