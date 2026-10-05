@@ -89,6 +89,8 @@ interface RenderJob {
   /** The media-library asset this render produced. */
   asset_id: string | null;
   created_at: string;
+  /** While rendering: waiting behind the org's other renders, or running. */
+  phase?: "queued" | "running";
 }
 
 // ── api ──────────────────────────────────────────────────────────────
@@ -937,7 +939,7 @@ function Editor({
                 <Sparkles className="w-4 h-4" /> Ask AI
               </button>
             )}
-            <ExportMenu comp={{ ...comp, name }} changes={changes} />
+            <ExportMenu comp={{ ...comp, name }} changes={changes} onDone={() => setChanges((n) => n + 1)} />
           </>,
           topbarSlot,
         )}
@@ -1801,29 +1803,56 @@ function LintMenu({ lint, onFix }: { lint: Lint | null; onFix?: (lint: Lint) => 
  * frame for frame, so making or changing one never needs a render; a file is
  * made only when someone wants one, and it downloads as soon as it is ready.
  * Each export also lands in the media library, so it can be reused as footage.
+ *
+ * The render runs in the background on the server, so a long video, a closed
+ * tab or a reload loses nothing: reopening the video picks the export up again.
+ * Only an export started in this tab downloads by itself when it is done.
  */
-function ExportMenu({ comp, changes }: { comp: Composition; changes: number }) {
+function ExportMenu({ comp, changes, onDone }: { comp: Composition; changes: number; onDone: () => void }) {
   const [open, setOpen] = useState(false);
   // null = not loaded yet: never claim "no exports" before we know.
   const [jobs, setJobs] = useState<RenderJob[] | null>(null);
-  const [exportingSince, setExportingSince] = useState<number | null>(null);
-  const [elapsed, setElapsed] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
   const [err, setErr] = useState("");
+  const startedHere = useRef<number | null>(null);
 
   async function load() {
-    const all = await api.get<RenderJob[]>("/api/renders").catch(() => null);
-    if (all) setJobs(all.filter((j) => j.composition_id === comp.id));
+    const list = await api
+      .get<RenderJob[]>(`/api/renders?composition_id=${encodeURIComponent(comp.id)}`)
+      .catch(() => null);
+    if (list) setJobs(list);
   }
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [comp.id, changes]);
 
+  const pending = (jobs ?? []).find((j) => j.status === "rendering");
+
+  // Follow the export in progress until it lands. Each look also finishes it
+  // on the server (copies the file, adds it to the media library).
   useEffect(() => {
-    if (exportingSince == null) return;
-    const t = setInterval(() => setElapsed(Math.floor((Date.now() - exportingSince) / 1000)), 1000);
-    return () => clearInterval(t);
-  }, [exportingSince]);
+    if (!pending) return;
+    const id = pending.id;
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+    const poll = setInterval(async () => {
+      const j = await api.get<RenderJob>(`/api/renders/${id}`).catch(() => null);
+      if (!j) return;
+      setJobs((all) => (all ? all.map((x) => (x.id === j.id ? j : x)) : all));
+      if (j.status === "rendering") return;
+      if (j.status === "failed") setErr(j.error || "The export failed.");
+      if (j.status === "completed") onDone(); // it is in the media library now
+      if (startedHere.current === j.id) {
+        startedHere.current = null;
+        if (j.status === "completed") download(j);
+      }
+    }, 3000);
+    return () => {
+      clearInterval(tick);
+      clearInterval(poll);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending?.id]);
 
   function download(job: RenderJob) {
     if (!job.output_url) return;
@@ -1838,22 +1867,19 @@ function ExportMenu({ comp, changes }: { comp: Composition; changes: number }) {
   async function exportMp4() {
     setOpen(false);
     setErr("");
-    setElapsed(0);
-    setExportingSince(Date.now());
     try {
       const job = await api.send<RenderJob>("POST", "/api/renders", { composition_id: comp.id });
-      if (job.status === "completed") download(job);
-      else setErr(job.error || "The export failed.");
+      if (job.status === "failed") setErr(job.error || "The export failed.");
+      else startedHere.current = job.id;
+      setNow(Date.now());
+      setJobs((all) => [job, ...(all ?? [])]);
     } catch (e) {
       setErr(String((e as Error).message || e));
-    } finally {
-      setExportingSince(null);
-      load();
     }
   }
 
   const done = (jobs ?? []).filter((j) => j.status === "completed" && j.output_url);
-  const exporting = exportingSince != null;
+  const elapsed = pending ? Math.max(0, Math.floor((now - parseDbTime(pending.created_at)) / 1000)) : 0;
 
   return (
     <>
@@ -1868,11 +1894,13 @@ function ExportMenu({ comp, changes }: { comp: Composition; changes: number }) {
           </button>
         </div>
       )}
-      <Popover open={open} onOpenChange={(o) => !exporting && setOpen(o)}>
+      <Popover open={open} onOpenChange={(o) => !pending && setOpen(o)}>
         <PopoverTrigger asChild>
-          <button disabled={exporting} className={btnPrimary}>
-            {exporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-            {exporting ? `Exporting… ${elapsed}s` : "Export"}
+          <button disabled={!!pending} className={btnPrimary}>
+            {pending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+            {pending
+              ? `${pending.phase === "queued" ? "Waiting for other exports" : "Exporting"}… ${elapsed}s`
+              : "Export"}
           </button>
         </PopoverTrigger>
         <PopoverContent align="end">
@@ -1881,7 +1909,7 @@ function ExportMenu({ comp, changes }: { comp: Composition; changes: number }) {
               <Film className="w-4 h-4 shrink-0 text-muted" />
               <span className="flex-1 min-w-0">
                 <span className="block truncate">Export MP4</span>
-                <span className="block truncate text-fine text-faint">Up to a minute, then it downloads</span>
+                <span className="block truncate text-fine text-faint">Downloads when it is ready</span>
               </span>
             </CommandItem>
             {jobs === null ? (
@@ -1908,8 +1936,13 @@ function ExportMenu({ comp, changes }: { comp: Composition; changes: number }) {
   );
 }
 
+/** A database time ("2026-10-05 12:00:00", UTC) as epoch milliseconds. */
+function parseDbTime(s: string): number {
+  return Date.parse(s.replace(" ", "T") + "Z");
+}
+
 function fmtExportDate(s: string): string {
-  const d = new Date(s.replace(" ", "T") + "Z");
+  const d = new Date(parseDbTime(s));
   return isNaN(d.getTime())
     ? s
     : d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });

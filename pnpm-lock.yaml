@@ -15,8 +15,8 @@ importers:
         specifier: ^0.2.0
         version: 0.2.0
       '@clawnify/services':
-        specifier: ^0.3.0
-        version: 0.3.0
+        specifier: ^0.4.0
+        version: 0.4.0
       '@hyperframes/lint':
         specifier: ~0.8.97
         version: 0.8.97
@@ -197,8 +197,8 @@ packages:
       '@hono/zod-openapi': '>=0.18 <1'
       hono: '*'
 
-  '@clawnify/services@0.3.0':
-    resolution: {integrity: sha512-XhgEVQQm/IsbSMmFh7NtHg0YZXXe89JtSXOHvMAXKTB06jCLqQdmq2bHA4ZqO+AAfw6rsgrxvLVjLrGHqnCGmQ==}
+  '@clawnify/services@0.4.0':
+    resolution: {integrity: sha512-nycYfQQjsM1LJ9M2dryjg2AqnO91dDLT6uqGYAJCtdpBNxWunkGu8/GwdCWfFNCdfISXs9lXZuUdPvxqZE6paQ==}
 
   '@cloudflare/kv-asset-handler@0.5.0':
     resolution: {integrity: sha512-jxQYkj8dSIzc0cD6cMMNdOc1UVjqSqu8BZdor5s8cGjW2I8BjODt/kWPVdY+u9zj3ms75Q5qaZgnxUad83+eAg==}
@@ -2649,7 +2649,7 @@ snapshots:
       '@hono/zod-openapi': 0.19.10(hono@4.12.25)(zod@3.25.76)
       hono: 4.12.25
 
-  '@clawnify/services@0.3.0': {}
+  '@clawnify/services@0.4.0': {}
 
   '@cloudflare/kv-asset-handler@0.5.0': {}
 
