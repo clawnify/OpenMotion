@@ -939,7 +939,7 @@ function Editor({
                 <Sparkles className="w-4 h-4" /> Ask AI
               </button>
             )}
-            <ExportMenu comp={{ ...comp, name }} changes={changes} />
+            <ExportMenu comp={{ ...comp, name }} changes={changes} onDone={() => setChanges((n) => n + 1)} />
           </>,
           topbarSlot,
         )}
@@ -1808,7 +1808,7 @@ function LintMenu({ lint, onFix }: { lint: Lint | null; onFix?: (lint: Lint) => 
  * tab or a reload loses nothing: reopening the video picks the export up again.
  * Only an export started in this tab downloads by itself when it is done.
  */
-function ExportMenu({ comp, changes }: { comp: Composition; changes: number }) {
+function ExportMenu({ comp, changes, onDone }: { comp: Composition; changes: number; onDone: () => void }) {
   const [open, setOpen] = useState(false);
   // null = not loaded yet: never claim "no exports" before we know.
   const [jobs, setJobs] = useState<RenderJob[] | null>(null);
@@ -1841,6 +1841,7 @@ function ExportMenu({ comp, changes }: { comp: Composition; changes: number }) {
       setJobs((all) => (all ? all.map((x) => (x.id === j.id ? j : x)) : all));
       if (j.status === "rendering") return;
       if (j.status === "failed") setErr(j.error || "The export failed.");
+      if (j.status === "completed") onDone(); // it is in the media library now
       if (startedHere.current === j.id) {
         startedHere.current = null;
         if (j.status === "completed") download(j);
@@ -1908,7 +1909,7 @@ function ExportMenu({ comp, changes }: { comp: Composition; changes: number }) {
               <Film className="w-4 h-4 shrink-0 text-muted" />
               <span className="flex-1 min-w-0">
                 <span className="block truncate">Export MP4</span>
-                <span className="block truncate text-fine text-faint">Downloads when it is ready, even after a reload</span>
+                <span className="block truncate text-fine text-faint">Downloads when it is ready</span>
               </span>
             </CommandItem>
             {jobs === null ? (

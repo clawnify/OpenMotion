@@ -568,6 +568,13 @@ function settleIO(env: Bindings): SettleIO {
   };
 }
 
+/** An export brought up to date, as stored (re-read when settling changed it). */
+async function look(row: RenderJob, io: SettleIO) {
+  const out = await settle(row, io);
+  if (out.status === row.status) return out;
+  return (await get<RenderJob>("SELECT * FROM render_jobs WHERE id = ?", [row.id])) ?? out;
+}
+
 // Newest first. ?composition_id narrows to one video; ?before=<id> pages back.
 app.get("/api/renders", async (c) => {
   const limit = Math.min(Math.max(Number(c.req.query("limit")) || 50, 1), 100);
@@ -588,13 +595,13 @@ app.get("/api/renders", async (c) => {
     [...args, limit],
   );
   const io = settleIO(c.env);
-  return c.json(await Promise.all(rows.map((r) => settle(r, io))));
+  return c.json(await Promise.all(rows.map((r) => look(r, io))));
 });
 
 app.get("/api/renders/:id", async (c) => {
   const row = await get<RenderJob>("SELECT * FROM render_jobs WHERE id = ?", [c.req.param("id")]);
   if (!row) return c.json({ error: "Not found" }, 404);
-  return c.json(await settle(row, settleIO(c.env)));
+  return c.json(await look(row, settleIO(c.env)));
 });
 
 app.post("/api/renders", async (c) => {
