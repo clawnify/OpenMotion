@@ -5,6 +5,7 @@ import {
   putUpload,
   getUpload,
   getUploadRange,
+  getUploadBytes,
   deleteUpload,
   makeKey,
 } from "./uploads";
@@ -15,6 +16,23 @@ import { lintComposition } from "./lint";
 import { z } from "zod";
 import { type ScreenDemoOptions, screenDemoHtml, screenDemoProblems, defaultSeconds, demoSpecOf, fitSeconds, minimumSeconds, replaceDemoSteps, withDemoSpec } from "../shared/screen-demo";
 import { capturePage, outlinePage, getVideoRender, ClawnifyServicesError, type CaptureStep, type CapturedPage } from "@clawnify/services";
+import { connect, type ConnectionsEnv, type CredentialBinding } from "@clawnify/connections";
+import { caller, user } from "@clawnify/app";
+import { audioDurationSeconds } from "./audio-duration";
+import { ProviderError, deleteFalOutput, falResult, falStatus, isTransient, listVoices, speak, submitAurora } from "./providers";
+import {
+  DEFAULT_MAX_SECONDS,
+  HARD_MAX_SECONDS,
+  IMAGE_TYPES,
+  OutputGone,
+  audioProblem,
+  costUsd,
+  dataUri,
+  presenterAssetName,
+  settle as settlePresenter,
+  type PresenterJob,
+  type SettleIO as PresenterIO,
+} from "./presenters";
 
 type Bindings = {
   DB: D1Database;
@@ -23,6 +41,14 @@ type Bindings = {
   CLAWNIFY_TOKEN?: string;
   // Override for local dev (defaults to https://services.clawnify.com).
   SERVICES_URL?: string;
+  // On Clawnify: the credentials broker and the org, for the org's fal.ai and
+  // ElevenLabs connections (clawnify.json app.credentials).
+  CREDENTIALS?: CredentialBinding;
+  CLAWNIFY_ORG_ID?: string;
+  // Self-hosted: the providers' own keys, used only when no Clawnify
+  // connection can be reached (see providerKey).
+  FAL_KEY?: string;
+  ELEVENLABS_API_KEY?: string;
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -644,6 +670,271 @@ app.post("/api/renders", async (c) => {
   const job = await get<RenderJob>("SELECT * FROM render_jobs WHERE id = ?", [jobId]);
   return c.json(job, job?.status === "failed" ? 201 : 202);
 });
+
+// ── Voices and presenters ────────────────────────────────────────────
+// Speech from a script (ElevenLabs), and a photo animated to speak a voice
+// clip (fal.ai). Both run on the user's own accounts. See presenters.ts.
+
+const PROVIDER_NAMES = { falai: "fal.ai", elevenlabs: "ElevenLabs" } as const;
+const SELF_HOSTED_KEY = { falai: "FAL_KEY", elevenlabs: "ELEVENLABS_API_KEY" } as const;
+
+/**
+ * The user's key for a provider. On Clawnify, the org's connection; nothing
+ * else, so disconnecting it there turns the feature off. Self-hosted (no
+ * Clawnify broker or token), the provider's own env var.
+ */
+async function providerKey(env: Bindings, service: "falai" | "elevenlabs"): Promise<string | null> {
+  const viaClawnify = await connect(service, env as unknown as ConnectionsEnv).token();
+  if (viaClawnify || env.CREDENTIALS || env.CLAWNIFY_TOKEN) return viaClawnify;
+  return env[SELF_HOSTED_KEY[service]] ?? null;
+}
+
+function notConnected(env: Bindings, service: "falai" | "elevenlabs") {
+  const how =
+    env.CREDENTIALS || env.CLAWNIFY_TOKEN
+      ? `connect ${PROVIDER_NAMES[service]} under Integrations in Clawnify`
+      : `set ${SELF_HOSTED_KEY[service]}`;
+  return { error: `${PROVIDER_NAMES[service]} is not connected: ${how}.`, service };
+}
+
+function providerFailure(err: unknown) {
+  if (err instanceof ProviderError) return { error: err.message, provider: err.provider };
+  throw err;
+}
+
+// The voices in the user's ElevenLabs account. ?search, ?category
+// (premade | cloned | generated | professional), ?page_token from the last page.
+app.get("/api/voices", async (c) => {
+  const key = await providerKey(c.env, "elevenlabs");
+  if (!key) return c.json(notConnected(c.env, "elevenlabs"), 409);
+  try {
+    return c.json(
+      await listVoices(key, {
+        search: c.req.query("search") || undefined,
+        category: c.req.query("category") || undefined,
+        pageToken: c.req.query("page_token") || undefined,
+        pageSize: Math.min(Math.max(Number(c.req.query("limit")) || 30, 1), 100),
+      }),
+    );
+  } catch (err) {
+    return c.json(providerFailure(err), 502);
+  }
+});
+
+const speechBody = z
+  .object({
+    voice_id: z.string().min(1).max(100),
+    script: z.string().min(1).max(10_000),
+    /** ElevenLabs model; theirs (eleven_multilingual_v2) when omitted. */
+    voice_model: z.string().min(1).max(100).optional(),
+    /** ElevenLabs voice_settings, passed through: stability, similarity_boost, style, speed, ... */
+    voice_settings: z.record(z.unknown()).optional(),
+    /** Library name. Default: the script's first words. */
+    name: z.string().min(1).max(200).optional(),
+  })
+  .strict();
+
+// Script -> speech in one of the user's voices -> an MP3 in the media library.
+// A voiceover on its own, or the voice of a presenter.
+app.post("/api/speech", async (c) => {
+  const parsed = speechBody.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: "Invalid speech request", problems: problems(parsed.error) }, 422);
+  const b = parsed.data;
+  const key = await providerKey(c.env, "elevenlabs");
+  if (!key) return c.json(notConnected(c.env, "elevenlabs"), 409);
+
+  let audio: Uint8Array;
+  try {
+    audio = await speak(key, { voiceId: b.voice_id, text: b.script, modelId: b.voice_model, voiceSettings: b.voice_settings });
+  } catch (err) {
+    return c.json(providerFailure(err), 502);
+  }
+  const seconds = audioDurationSeconds(audio);
+  const name = b.name ?? `Voiceover - ${b.script.trim().split(/\s+/).slice(0, 6).join(" ").replace(/[.,;:!?]+$/, "")}`;
+  const assetKey = `voice/${lower16()}.mp3`;
+  await putUpload(assetKey, audio, "audio/mpeg");
+  const id = lower16();
+  await run("INSERT INTO assets (id, key, name, content_type, size, duration) VALUES (?, ?, ?, 'audio/mpeg', ?, ?)", [
+    id,
+    assetKey,
+    `${name}.mp3`,
+    audio.byteLength,
+    seconds,
+  ]);
+  return c.json(await get<Asset>("SELECT * FROM assets WHERE id = ?", [id]), 201);
+});
+
+const presenterBody = z
+  .object({
+    /** The photo: a media-library image (PNG, JPEG or WebP). */
+    image_asset_id: z.string().min(1),
+    /** The voice: a media-library MP3 or WAV, e.g. from POST /api/speech. */
+    audio_asset_id: z.string().min(1),
+    /** How the person should come across: gestures, expression, energy. */
+    video_prompt: z.string().min(1).max(2000).optional(),
+    resolution: z.enum(["480p", "720p"]).default("480p"),
+    /** Longest voice clip accepted, in seconds. Longer is refused before anything is spent. */
+    max_seconds: z.number().int().min(1).max(HARD_MAX_SECONDS).default(DEFAULT_MAX_SECONDS),
+    /** Confirms the person shown agreed to be animated. Recorded with the job. */
+    consent: z.literal(true, { errorMap: () => ({ message: "must be true: the person shown agreed to be animated" }) }),
+    name: z.string().min(1).max(200).optional(),
+  })
+  .strict();
+
+/**
+ * The photo and voice travel to fal.ai inside the request, as base64 in JSON:
+ * roughly four copies in memory at once, so 8 MB stays well inside the app
+ * Worker's 128 MB. A minute of 128 kbps MP3 is about 1 MB, a photo a few MB.
+ */
+const MAX_INLINE_BYTES = 8 * 1024 * 1024;
+
+// Photo + voice clip -> a video of that person speaking, generated at fal.ai in
+// the background. Answers 202 with the job; GET /api/presenters/:id finishes it.
+app.post("/api/presenters", async (c) => {
+  const parsed = presenterBody.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: "Invalid presenter request", problems: problems(parsed.error) }, 422);
+  const b = parsed.data;
+
+  const image = await get<Asset>("SELECT * FROM assets WHERE id = ?", [b.image_asset_id]);
+  if (!image) return c.json({ error: "image_asset_id: no such asset" }, 404);
+  if (!IMAGE_TYPES.has(image.content_type)) {
+    return c.json({ error: `The photo must be PNG, JPEG or WebP, not ${image.content_type}.` }, 422);
+  }
+  const audio = await get<Asset>("SELECT * FROM assets WHERE id = ?", [b.audio_asset_id]);
+  if (!audio) return c.json({ error: "audio_asset_id: no such asset" }, 404);
+  if (image.size + audio.size > MAX_INLINE_BYTES) {
+    return c.json({ error: "The photo and voice clip together are over 8 MB. Use a smaller photo or a shorter clip." }, 413);
+  }
+
+  const key = await providerKey(c.env, "falai");
+  if (!key) return c.json(notConnected(c.env, "falai"), 409);
+
+  const [imageBytes, audioBytes] = await Promise.all([getUploadBytes(image.key), getUploadBytes(audio.key)]);
+  if (!imageBytes || !audioBytes) return c.json({ error: "The photo or voice clip is missing from storage." }, 404);
+  const voice = new Uint8Array(audioBytes);
+  const seconds = audioDurationSeconds(voice);
+  const problem = audioProblem(seconds, b.max_seconds, b.resolution);
+  if (problem) return c.json({ error: problem, audio_seconds: seconds }, 422);
+
+  let fal;
+  try {
+    fal = await submitAurora(key, {
+      image: dataUri(new Uint8Array(imageBytes), image.content_type),
+      audio: dataUri(voice, voice[0] === 0x52 ? "audio/wav" : "audio/mpeg"),
+      prompt: b.video_prompt,
+      resolution: b.resolution,
+    });
+  } catch (err) {
+    return c.json(providerFailure(err), 502);
+  }
+
+  const id = crypto.randomUUID();
+  const who = user(c);
+  await run(
+    `INSERT INTO presenter_jobs (id, name, image_asset_id, audio_asset_id, video_prompt, resolution, audio_seconds,
+       estimated_cost_usd, fal_request_id, fal_status_url, fal_response_url, consent_by, consent_caller, consent_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+    [
+      id,
+      b.name ?? image.name.replace(/\.[^.]+$/, ""),
+      image.id,
+      audio.id,
+      b.video_prompt ?? null,
+      b.resolution,
+      seconds,
+      costUsd(seconds!, b.resolution),
+      fal.request_id,
+      fal.status_url,
+      fal.response_url,
+      who?.email ?? null,
+      caller(c),
+    ],
+  );
+  return c.json(await get<PresenterJob>("SELECT * FROM presenter_jobs WHERE id = ?", [id]), 202);
+});
+
+function presenterIO(env: Bindings, falKey: string): PresenterIO {
+  return {
+    status: (job) => falStatus(falKey, job.fal_status_url),
+    result: (job) => falResult(falKey, job.fal_response_url),
+    async keep(url, key) {
+      const res = await fetch(url);
+      // A 4xx from fal's CDN means the file is gone (expired); waiting won't bring it back.
+      if (!res.ok && !isTransient(res.status)) throw new OutputGone(`fal.ai answered ${res.status} for the video`);
+      if (!res.ok || !res.body) throw new Error(`could not fetch the finished video from fal.ai (${res.status})`);
+      const length = Number(res.headers.get("content-length"));
+      if (length > 0) {
+        await putUpload(key, res.body, "video/mp4");
+        return length;
+      }
+      const bytes = await res.arrayBuffer();
+      await putUpload(key, bytes, "video/mp4");
+      return bytes.byteLength;
+    },
+    discard: (job) => deleteFalOutput(falKey, job.fal_request_id),
+    async asset(key, size, job) {
+      await run(
+        "INSERT OR IGNORE INTO assets (id, key, name, content_type, size, duration) VALUES (?, ?, ?, 'video/mp4', ?, ?)",
+        [lower16(), key, presenterAssetName(job.name), size, job.audio_seconds],
+      );
+      const row = await get<{ id: string }>("SELECT id FROM assets WHERE key = ?", [key]);
+      return row!.id;
+    },
+    async update(id, patch) {
+      const cols = Object.keys(patch);
+      await run(
+        `UPDATE presenter_jobs SET ${cols.map((k) => `${k} = ?`).join(", ")}, updated_at = datetime('now') WHERE id = ?`,
+        [...cols.map((k) => patch[k as keyof typeof patch] ?? null), id],
+      );
+    },
+  };
+}
+
+/** A presenter brought up to date, as stored. Without a fal.ai key it is shown as it was. */
+async function lookPresenter(row: PresenterJob, env: Bindings) {
+  if (row.status !== "generating") return row;
+  const key = await providerKey(env, "falai");
+  if (!key) return row;
+  let out;
+  try {
+    out = await settlePresenter(row, presenterIO(env, key));
+  } catch (err) {
+    // Copying the finished video failed this time. The job stays generating
+    // and the next look tries again (fal keeps the output for an hour).
+    console.error(err);
+    return row;
+  }
+  if (out.status === row.status) return out;
+  return (await get<PresenterJob>("SELECT * FROM presenter_jobs WHERE id = ?", [row.id])) ?? out;
+}
+
+// Newest first. ?before=<id of the last presenter on the page> pages back.
+// created_at has one-second resolution, so the id breaks ties: no row is
+// skipped or repeated when several start in the same second.
+app.get("/api/presenters", async (c) => {
+  const limit = Math.min(Math.max(Number(c.req.query("limit")) || 20, 1), 100);
+  const before = c.req.query("before");
+  const after = before
+    ? await get<{ created_at: string; id: string }>("SELECT created_at, id FROM presenter_jobs WHERE id = ?", [before])
+    : null;
+  if (before && !after) return c.json({ error: "before: no such presenter" }, 404);
+  const rows = await query<PresenterJob>(
+    `SELECT * FROM presenter_jobs ${after ? "WHERE created_at < ? OR (created_at = ? AND id < ?)" : ""}
+     ORDER BY created_at DESC, id DESC LIMIT ?`,
+    after ? [after.created_at, after.created_at, after.id, limit] : [limit],
+  );
+  return c.json(await Promise.all(rows.map((r) => lookPresenter(r, c.env))));
+});
+
+app.get("/api/presenters/:id", async (c) => {
+  const row = await get<PresenterJob>("SELECT * FROM presenter_jobs WHERE id = ?", [c.req.param("id")]);
+  if (!row) return c.json({ error: "Not found" }, 404);
+  return c.json(await lookPresenter(row, c.env));
+});
+
+function problems(error: z.ZodError): string[] {
+  return error.issues.map((i) => `${i.path.join(".") || "body"}: ${i.message}`);
+}
 
 // ── helpers ──────────────────────────────────────────────────────────
 

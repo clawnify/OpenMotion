@@ -153,6 +153,50 @@ frame, so the preview shows the frame the render will. Give a video clip a
 `data-duration` (shorter trims it, longer holds its last frame) so it counts
 toward the composition's length.
 
+## Voiceovers and presenters (generated)
+
+Two things the app can make for the user, on their own accounts (each bills
+them directly): **speech** from a script in one of their ElevenLabs voices,
+and a **presenter**, a photo of a person animated to speak a voice clip
+(fal.ai). Both land in the Media library like an upload.
+
+- **Voices:** `GET /api/voices` lists the voices in their ElevenLabs account
+  (`?search=`, `?category=cloned` for their own cloned voice, `?page_token=`
+  for more). Use the voice they name; if they name none, ask, don't pick one.
+- **Voiceover:** `POST /api/speech { voice_id, script }` (optional
+  `voice_model`, `voice_settings`, `name`) answers with an MP3 asset and its
+  `duration`. Put it in the video as an `<audio class="clip">` like any sound.
+- **Presenter:** `POST /api/presenters { image_asset_id, audio_asset_id,
+  consent: true }` (optional `video_prompt` for gestures and expression,
+  `resolution` `480p` (default) or `720p`, `max_seconds`, `name`). The voice
+  is any MP3/WAV asset: one from `/api/speech`, or a recording they uploaded.
+  It answers at once, `status: "generating"` (202), with `estimated_cost_usd`.
+  A 30-second clip takes about three minutes: check
+  `GET /api/presenters/{id}` first after about two minutes, then every 30
+  seconds, never in a tight loop, until `completed` (its `asset_id` is the
+  video) or `failed` (read `error`). Then use it as the `clip` of a screen
+  demo's `pip` or `split` layout, or as a video clip of its own.
+
+**Consent.** Send `consent: true` only when the person in the photo is the
+user, or the user says that person agreed to be animated. Never for anyone
+else, a public figure included. The app records who confirmed it, and when.
+
+**Cost: ask first.** fal.ai bills the user per second of video, rounded up:
+about $0.07 at 480p and $0.14 at 720p. Before `POST /api/presenters`, tell the
+user what it will cost (the voice clip's `duration` from `GET /api/assets`,
+times that rate) and wait for a yes. Voice clips over `max_seconds` (60 unless
+raised, at most 300) are refused before anything is spent, with what they would
+cost: raise `max_seconds` only when the user has agreed to that length and
+price.
+
+**Say it is generated.** A presenter is an AI-generated likeness (its library
+name ends in "(AI presenter)"). Wherever the video is published, say so, for
+example a caption "AI-generated presenter" in the video or in the post.
+
+**Not connected:** a 409 names the missing service. On Clawnify the user
+connects fal.ai or ElevenLabs under Integrations; self-hosted, the app reads
+`FAL_KEY` and `ELEVENLABS_API_KEY`.
+
 ## Product demos of a web app (screen-recording style)
 
 When the user asks for a demo, walkthrough or "screen recording" of a web app
@@ -324,6 +368,11 @@ captions only to a demo you will not rebuild.
 | PUT  | `/api/compositions/{id}` | Update any of `name/description/html/fps` → the row with `lint` |
 | DELETE | `/api/compositions/{id}` | Delete |
 | GET  | `/api/assets` | List uploaded media |
+| GET  | `/api/voices` | The user's ElevenLabs voices: `?search=`, `?category=`, `?page_token=` |
+| POST | `/api/speech` | Script to speech `{ voice_id, script }` → an MP3 asset |
+| POST | `/api/presenters` | Photo + voice clip to a talking-head video `{ image_asset_id, audio_asset_id, consent: true }` → the job at once |
+| GET  | `/api/presenters/{id}` | One presenter: poll it until `status` is `completed` (`asset_id`) or `failed` |
+| GET  | `/api/presenters` | List presenters, newest first: `?limit=` (default 20), `?before=<id>` for older |
 | POST | `/api/renders` | Export an MP4 `{ composition_id }` (only when a file is asked for) → returns the job at once |
 | GET  | `/api/renders/{id}` | One export: poll it until `status` is `completed` or `failed` |
 | GET  | `/api/renders` | List exports, newest first: `?composition_id=`, `?limit=` (default 50, max 100), `?before=<id>` for older |

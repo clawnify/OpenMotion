@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@clawnify/app": "^0.4.2",
+    "@clawnify/connections": "^0.6.0",
     "@clawnify/db": "^0.2.0",
     "@clawnify/services": "^0.4.0",
     "@hyperframes/lint": "~0.8.97",

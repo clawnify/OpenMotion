@@ -14,7 +14,8 @@
   "app": {
     "framework": "react+hono",
     "database": true,
-    "storage": true
+    "storage": true,
+    "credentials": ["falai", "elevenlabs"]
   },
   "deploy": {
     "title": "Deploy your OpenMotion studio",

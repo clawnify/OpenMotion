@@ -11,6 +11,9 @@ importers:
       '@clawnify/app':
         specifier: ^0.4.2
         version: 0.4.2(@cloudflare/workers-types@4.20260613.1)(@hono/zod-openapi@0.19.10(hono@4.12.25)(zod@3.25.76))(@phosphor-icons/react@2.1.10(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(hono@4.12.25)(react@19.2.7)
+      '@clawnify/connections':
+        specifier: ^0.6.0
+        version: 0.6.0
       '@clawnify/db':
         specifier: ^0.2.0
         version: 0.2.0
@@ -185,11 +188,17 @@ packages:
       react:
         optional: true
 
+  '@clawnify/connections@0.6.0':
+    resolution: {integrity: sha512-doo/z6mS0on8/cOMp0kkJNDt1ZoRsBEn0X4rJM4lAD7+5wzwoZXY6TcA1Cda4AD3oJp0jDq6Wjm/asrIII7tEQ==}
+
   '@clawnify/db@0.2.0':
     resolution: {integrity: sha512-6ADNSig+qLg24xajbDcjJXktBZSNKwfTDJhh1oH5TFKh8frVOzHirVGe06XTeMn9m5lI40jlpQ2sLo0OOl0iEA==}
 
   '@clawnify/db@0.4.2':
     resolution: {integrity: sha512-s+G/5bDVFx7Na8WVETfl8EhyPcbmgs5LIE1TsM0vGUOAtPihQGlVX1xpfmg5lsMv8+OChKaHsZIMnzpXY8pyAw==}
+
+  '@clawnify/integrations@0.4.0':
+    resolution: {integrity: sha512-epX7r9VHczmjHJuegsn1ogRM9SG8CsYLsyF6hfxN3uV4nDYjdWazNingZnAgOI+ynVj0ZLV8x2rUnNoUUnSuQw==}
 
   '@clawnify/routes@0.3.0':
     resolution: {integrity: sha512-ALKVoN1ui9KXSSoybSKumEiJ7fTAe793y2HwCPGEkvXlgV29yAGXad8qVOeGYzrKe6KACJ8twFA4uheQrJSmqA==}
@@ -2607,6 +2616,10 @@ snapshots:
       - sql.js
       - sqlite3
 
+  '@clawnify/connections@0.6.0':
+    dependencies:
+      '@clawnify/integrations': 0.4.0
+
   '@clawnify/db@0.2.0': {}
 
   '@clawnify/db@0.4.2(@cloudflare/workers-types@4.20260613.1)':
@@ -2643,6 +2656,8 @@ snapshots:
       - prisma
       - sql.js
       - sqlite3
+
+  '@clawnify/integrations@0.4.0': {}
 
   '@clawnify/routes@0.3.0(@hono/zod-openapi@0.19.10(hono@4.12.25)(zod@3.25.76))(hono@4.12.25)':
     dependencies:
