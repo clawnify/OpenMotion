@@ -362,9 +362,16 @@ Fix every error before you report back. Warnings are worth fixing when the fix
 is small. The editor shows the same list to the user as an "issues" badge, with
 an "Ask AI to fix" button that sends you the findings.
 
+Two HyperFrames rules are never reported, because their fix (move a scene into
+a separate sub-composition file) cannot be made in a one-document composition:
+a track with many clips, and a scene wrapper with its own inner layout
+(`<div id="s1" class="clip"><div id="s1i">…`). Both render correctly. Do not
+add `data-composition-id` to a scene to silence anything: it changes how the
+scene's children are timed.
+
 ## Exporting (only when a file is asked for)
 
-Rendering makes an MP4 file. It takes up to a minute and is metered, so do it
+Rendering makes an MP4 file. It takes from a minute to several and is metered, so do it
 only when the user asks for a file: to download it, post it, send it or attach
 it. "Make me a video" or "change the title" never needs a render; "send me the
 video" or "export it" does.

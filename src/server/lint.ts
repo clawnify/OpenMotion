@@ -37,8 +37,14 @@ const MAX_FINDINGS = 10;
  * to move scenes into separate .html files under compositions/; a composition
  * here is one HTML document, so the badge would point at a fix nobody can
  * apply (every product demo has a still per step and would carry it).
+ * nested_structure_needs_subcomposition says the same about any scene wrapper
+ * with an inner layout (<div id="s1"><div id="s1i">…). It is only a warning
+ * outside HyperFrames Studio and the scene renders fine; the one in-document
+ * way to silence it, data-composition-id on the scene, changes how the runtime
+ * times the scene's children, so an agent chasing the badge breaks working
+ * animation.
  */
-const NOT_HERE = new Set(["timeline_track_too_dense"]);
+const NOT_HERE = new Set(["timeline_track_too_dense", "nested_structure_needs_subcomposition"]);
 
 /**
  * The document the renderer actually loads. The render service wraps a bare
