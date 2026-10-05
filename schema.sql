@@ -63,3 +63,32 @@ CREATE TABLE IF NOT EXISTS render_jobs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_render_jobs_composition ON render_jobs(composition_id);
+
+-- Presenters: a photo and a voice clip (both media-library assets) turned into a
+-- video of that person speaking, at fal.ai. One row per generation; settled when
+-- looked at, like render_jobs (src/server/presenters.ts). status: generating |
+-- completed | failed. The finished video becomes a media-library asset.
+CREATE TABLE IF NOT EXISTS presenter_jobs (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'generating',
+  image_asset_id TEXT NOT NULL,
+  audio_asset_id TEXT NOT NULL,
+  video_prompt TEXT,
+  resolution TEXT NOT NULL DEFAULT '480p',
+  audio_seconds REAL NOT NULL,
+  estimated_cost_usd REAL NOT NULL,
+  fal_request_id TEXT NOT NULL,
+  fal_status_url TEXT NOT NULL,
+  fal_response_url TEXT NOT NULL,
+  asset_id TEXT,
+  error TEXT,
+  -- The consent record: the request confirmed the person shown agreed to be
+  -- animated. Who (an email when a person asked), how the request came in, when.
+  -- image_asset_id above says which photo.
+  consent_by TEXT,
+  consent_caller TEXT NOT NULL,
+  consent_at TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
