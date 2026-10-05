@@ -371,8 +371,10 @@ video" or "export it" does.
 
 `POST /api/renders { composition_id }` answers at once with the job,
 `status: "rendering"` (202). The render runs in the background: a few seconds
-of video take about a minute, longer videos take minutes. Do not wait on one
-request. Poll `GET /api/renders/{id}` every 10 to 20 seconds until `status` is
+of video take about a minute, a 90-second video about four minutes. Do not wait on
+one request, and do not poll in a tight loop: each check is a call you pay
+for. Check `GET /api/renders/{id}` first after about as many seconds as the
+video is long, then every 30 seconds, until `status` is
 `completed` (share its `output_url`) or `failed` (read `error`, fix, export
 again). While rendering, `phase: "queued"` means it waits for the org's other
 renders. Nothing is lost if you stop polling: the next look (yours, the
