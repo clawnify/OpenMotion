@@ -286,16 +286,24 @@ app.post("/api/demos", async (c) => {
     return captureFailed(c, err);
   }
 
-  // Each still into the media library, under keys unique to this capture.
+  // Each still (and click motion video) into the media library, under keys
+  // unique to this capture.
   const id = existing?.id ?? crypto.randomUUID();
   const prefix = `demo-${id.slice(0, 8)}-${lower8().slice(0, 6)}`;
-  const keep = async (url: string, name: string) => {
+  const keep = async (url: string, name: string, video?: { seconds: number }) => {
     const res = await fetch(url);
-    if (!res.ok) throw new ClawnifyServicesError(`could not fetch a captured still (${res.status})`, { status: 502 });
+    if (!res.ok) throw new ClawnifyServicesError(`could not fetch a captured ${video ? "video" : "still"} (${res.status})`, { status: 502 });
     const data = await res.arrayBuffer();
-    const key = `${prefix}-${name}.png`;
-    await putUpload(key, data, "image/png");
-    await run("INSERT INTO assets (key, name, content_type, size) VALUES (?, ?, 'image/png', ?)", [key, key, data.byteLength]);
+    const type = video ? "video/mp4" : "image/png";
+    const key = `${prefix}-${name}.${video ? "mp4" : "png"}`;
+    await putUpload(key, data, type);
+    await run("INSERT INTO assets (key, name, content_type, size, duration) VALUES (?, ?, ?, ?, ?)", [
+      key,
+      key,
+      type,
+      data.byteLength,
+      video?.seconds ?? null,
+    ]);
     return key;
   };
   const steps: ScreenDemoOptions["steps"] = [];
@@ -312,6 +320,9 @@ app.post("/api/demos", async (c) => {
         drag: s.drag,
         connect: s.connect,
         type: s.type && { box: s.type.box, frames },
+        motion: s.motion && s.click
+          ? { src: `assets/${await keep(s.motion.video_url, `${i + 1}-motion`, s.motion)}`, seconds: s.motion.seconds }
+          : undefined,
       });
     }
   } catch (err) {
@@ -356,10 +367,10 @@ app.post("/api/demos", async (c) => {
       `UPDATE compositions SET name = ?, description = ?, html = ?, updated_at = datetime('now') WHERE id = ?`,
       [b.name ?? existing.name, b.description ?? existing.description, html, id],
     );
-    // The stills of the capture this one replaces: only keys this endpoint
-    // made for this composition (demo-<id8>-<run>-…), never an upload of the
-    // user's that happens to be named demo-something.
-    const ours = new RegExp(`assets/(demo-${id.slice(0, 8)}-[0-9a-f]{6}-[0-9a-z-]+\\.png)`, "g");
+    // The stills and videos of the capture this one replaces: only keys this
+    // endpoint made for this composition (demo-<id8>-<run>-…), never an upload
+    // of the user's that happens to be named demo-something.
+    const ours = new RegExp(`assets/(demo-${id.slice(0, 8)}-[0-9a-f]{6}-[0-9a-z-]+\\.(?:png|mp4))`, "g");
     const old = new Set([...existing.html.matchAll(ours)].map((m) => m[1]));
     for (const key of old) {
       if (html.includes(`assets/${key}`)) continue;

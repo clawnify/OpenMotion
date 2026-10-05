@@ -198,7 +198,12 @@ app walks the page in a real browser on Clawnify's capture service.
    target that matched several controls). Open it for the user at
    `/<composition id>`.
 
-A step is `{ focus?, seconds?, <one action> }`:
+A step is `{ focus?, seconds?, <one action> }`. After a click the capture also
+records what the app does about it (a menu opening, a modal fading in, a tab
+sliding over) as a short video, played from the moment the cursor presses, so
+the demo shows the app's own motion rather than a cut. Nothing to ask for: it
+is on for every click, and a click that changes the screen at once simply has
+none. Add `"motion": false` to a click step to skip it.
 
 ```json
 [
@@ -292,10 +297,13 @@ in from 3D and closes with it tilting away.
 It answers like a create, with `lint`; a bad step answers 400 with `problems`.
 
 The result is an ordinary composition: one `<img class="clip demo-step">` per
-step (plus one per typed still), and a script that turns each step's
+step (plus one per typed still, and a `<video class="clip demo-motion">` per
+click that had motion), and a script that turns each step's
 `data-start`, focus and action boxes into the camera, cursor and action. So moving or trimming a step on
-the timeline moves its motion with it. Leave that script as it is; change the
-look around it.
+the timeline moves its motion with it. A click's motion video is a clip of its
+own; the editor moves it with its step, and when you move a step in the HTML,
+move its motion clip too, so it still starts as the cursor presses.
+Leave that script as it is; change the look around it.
 
 A rebuild (`composition_id`) regenerates the whole composition from the
 request, so anything added by hand since (a title, a caption, a moved step) is
