@@ -8,12 +8,13 @@ import {
   deleteUpload,
   makeKey,
 } from "./uploads";
-import { renderComposition } from "./render";
+import { startRender } from "./render";
+import { settle, type RenderJob, type SettleIO } from "./exports";
 import { compositionLength, withLength } from "../shared/length";
 import { lintComposition } from "./lint";
 import { z } from "zod";
 import { type ScreenDemoOptions, screenDemoHtml, screenDemoProblems, defaultSeconds, demoSpecOf, fitSeconds, minimumSeconds, replaceDemoSteps, withDemoSpec } from "../shared/screen-demo";
-import { capturePage, outlinePage, ClawnifyServicesError, type CaptureStep, type CapturedPage } from "@clawnify/services";
+import { capturePage, outlinePage, getVideoRender, ClawnifyServicesError, type CaptureStep, type CapturedPage } from "@clawnify/services";
 
 type Bindings = {
   DB: D1Database;
@@ -526,27 +527,74 @@ app.get("/api/uploads/:key{.+}", async (c) => {
 });
 
 // ── Renders ──────────────────────────────────────────────────────────
+// An export renders in the background on the managed render service: POST
+// answers at once, and the job is finished by whoever looks at it next (the
+// editor polling, an agent, the export list). See exports.ts.
 
-interface RenderJob {
-  id: number;
-  composition_id: string;
-  status: string;
-  output_url: string | null;
-  error: string | null;
-  asset_id: string | null;
-  created_at: string;
-  updated_at: string;
+function settleIO(env: Bindings): SettleIO {
+  return {
+    status: (id) => getVideoRender(servicesEnv(env), id),
+    async keep(url, key) {
+      const res = await fetch(url);
+      if (!res.ok || !res.body) throw new Error(`could not fetch the finished render (${res.status})`);
+      // R2 streams a body only when its length is known; a signed R2 link says it.
+      const length = Number(res.headers.get("content-length"));
+      if (length > 0) {
+        await putUpload(key, res.body, "video/mp4");
+        return length;
+      }
+      const bytes = await res.arrayBuffer();
+      await putUpload(key, bytes, "video/mp4");
+      return bytes.byteLength;
+    },
+    async asset(key, size, job) {
+      // A finished composition is footage. Register it in the media library, so
+      // it can be reused and, later, handed to OpenVideo as an editable clip.
+      const comp = await get<{ name: string }>("SELECT name FROM compositions WHERE id = ?", [job.composition_id]);
+      await run(
+        "INSERT OR IGNORE INTO assets (id, key, name, content_type, size, duration) VALUES (?, ?, ?, 'video/mp4', ?, ?)",
+        [lower16(), key, `${comp?.name ?? "Export"}.mp4`, size, job.seconds],
+      );
+      const row = await get<{ id: string }>("SELECT id FROM assets WHERE key = ?", [key]);
+      return row!.id;
+    },
+    async update(id, patch) {
+      const cols = Object.keys(patch);
+      await run(
+        `UPDATE render_jobs SET ${cols.map((k) => `${k} = ?`).join(", ")}, updated_at = datetime('now') WHERE id = ?`,
+        [...cols.map((k) => patch[k as keyof typeof patch] ?? null), id],
+      );
+    },
+  };
 }
 
+// Newest first. ?composition_id narrows to one video; ?before=<id> pages back.
 app.get("/api/renders", async (c) => {
-  const rows = await query<RenderJob>("SELECT * FROM render_jobs ORDER BY created_at DESC LIMIT 50");
-  return c.json(rows);
+  const limit = Math.min(Math.max(Number(c.req.query("limit")) || 50, 1), 100);
+  const where: string[] = [];
+  const args: unknown[] = [];
+  const comp = c.req.query("composition_id");
+  if (comp) {
+    where.push("composition_id = ?");
+    args.push(comp);
+  }
+  const before = Number(c.req.query("before"));
+  if (before > 0) {
+    where.push("id < ?");
+    args.push(before);
+  }
+  const rows = await query<RenderJob>(
+    `SELECT * FROM render_jobs ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY id DESC LIMIT ?`,
+    [...args, limit],
+  );
+  const io = settleIO(c.env);
+  return c.json(await Promise.all(rows.map((r) => settle(r, io))));
 });
 
 app.get("/api/renders/:id", async (c) => {
   const row = await get<RenderJob>("SELECT * FROM render_jobs WHERE id = ?", [c.req.param("id")]);
   if (!row) return c.json({ error: "Not found" }, 404);
-  return c.json(row);
+  return c.json(await settle(row, settleIO(c.env)));
 });
 
 app.post("/api/renders", async (c) => {
@@ -561,49 +609,33 @@ app.post("/api/renders", async (c) => {
     );
   }
 
+  // Stated on the root, so the MP4 is as long as the preview and the timeline
+  // say (see shared/length.ts).
+  const html = withLength(comp.html);
   const res = await run(
-    "INSERT INTO render_jobs (composition_id, status) VALUES (?, 'rendering')",
-    [composition_id],
+    "INSERT INTO render_jobs (composition_id, status, seconds) VALUES (?, 'rendering', ?)",
+    [composition_id, compositionLength(html)],
   );
   const jobId = res.lastInsertRowid as number;
 
   try {
     const assets = await query<Asset>("SELECT key FROM assets");
-    const mp4 = await renderComposition({
-      // Stated on the root, so the MP4 is as long as the preview and the
-      // timeline say (see shared/length.ts).
-      html: withLength(comp.html),
+    const serviceJobId = await startRender(servicesEnv(c.env), {
+      html,
       fps: comp.fps,
       assets,
       filename: `${makeKey(comp.name)}.mp4`,
-      servicesUrl: c.env.SERVICES_URL,
-      token: c.env.CLAWNIFY_TOKEN,
     });
-
-    const key = `renders/render-${jobId}-${lower8()}.mp4`;
-    await putUpload(key, mp4, "video/mp4");
-    const url = `/api/uploads/${encodeURIComponent(key)}`;
-
-    // A finished composition is footage. Register it in the media library, so
-    // it can be reused and, later, handed to OpenVideo as an editable clip.
-    const assetId = lower16();
-    await run(
-      "INSERT INTO assets (id, key, name, content_type, size, duration) VALUES (?, ?, ?, 'video/mp4', ?, ?)",
-      [assetId, key, `${comp.name}.mp4`, mp4.byteLength, compositionLength(comp.html)],
-    );
-    await run(
-      "UPDATE render_jobs SET status = 'completed', output_url = ?, asset_id = ?, updated_at = datetime('now') WHERE id = ?",
-      [url, assetId, jobId],
-    );
+    await run("UPDATE render_jobs SET service_job_id = ? WHERE id = ?", [serviceJobId, jobId]);
   } catch (err) {
     await run(
       "UPDATE render_jobs SET status = 'failed', error = ?, updated_at = datetime('now') WHERE id = ?",
-      [String(err).slice(0, 1000), jobId],
+      [String(err instanceof Error ? err.message : err).slice(0, 1000), jobId],
     );
   }
 
   const job = await get<RenderJob>("SELECT * FROM render_jobs WHERE id = ?", [jobId]);
-  return c.json(job, 201);
+  return c.json(job, job?.status === "failed" ? 201 : 202);
 });
 
 // ── helpers ──────────────────────────────────────────────────────────

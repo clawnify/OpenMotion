@@ -324,8 +324,9 @@ captions only to a demo you will not rebuild.
 | PUT  | `/api/compositions/{id}` | Update any of `name/description/html/fps` → the row with `lint` |
 | DELETE | `/api/compositions/{id}` | Delete |
 | GET  | `/api/assets` | List uploaded media |
-| POST | `/api/renders` | Export an MP4 `{ composition_id }` (only when a file is asked for) → returns the job |
-| GET  | `/api/renders` | List exports |
+| POST | `/api/renders` | Export an MP4 `{ composition_id }` (only when a file is asked for) → returns the job at once |
+| GET  | `/api/renders/{id}` | One export: poll it until `status` is `completed` or `failed` |
+| GET  | `/api/renders` | List exports, newest first: `?composition_id=`, `?limit=` (default 50, max 100), `?before=<id>` for older |
 
 ## Authoring flow
 
@@ -368,15 +369,21 @@ only when the user asks for a file: to download it, post it, send it or attach
 it. "Make me a video" or "change the title" never needs a render; "send me the
 video" or "export it" does.
 
-`POST /api/renders { composition_id }` blocks until the MP4 is ready and
-returns the job with `output_url`, or `status: "failed"` with an `error` to fix
-and retry. Share the `output_url`. In the app this is the **Export** button.
+`POST /api/renders { composition_id }` answers at once with the job,
+`status: "rendering"` (202). The render runs in the background: a few seconds
+of video take about a minute, longer videos take minutes. Do not wait on one
+request. Poll `GET /api/renders/{id}` every 10 to 20 seconds until `status` is
+`completed` (share its `output_url`) or `failed` (read `error`, fix, export
+again). While rendering, `phase: "queued"` means it waits for the org's other
+renders. Nothing is lost if you stop polling: the next look (yours, the
+editor's, the export list's) finishes it. In the app this is the **Export**
+button.
 
 ## How rendering works (so you can reason about failures)
 
 `POST /api/renders` ships your composition HTML + referenced assets to
-Clawnify's managed render service, which runs `hyperframes render` and returns
-the MP4. The app itself does no rendering — it's a thin client. Failures usually
+Clawnify's managed render service, which runs `hyperframes render` in the
+background; when it is done, the next look copies the MP4 into the app. The app itself does no rendering — it's a thin client. Failures usually
 mean: a malformed composition (missing `data-composition-id`/dimensions, or a
 timeline not registered on `window.__timelines`), or a referenced asset path
 that doesn't match a real `key`. Read `error`, fix the HTML, render again.

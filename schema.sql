@@ -54,7 +54,12 @@ CREATE TABLE IF NOT EXISTS render_jobs (
   -- ever gets downloaded.
   asset_id TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  -- The render service's job id. A render runs in the background there and
+  -- is polled until it lands (src/server/exports.ts).
+  service_job_id TEXT,
+  -- The video's length when it was exported, for the media-library asset.
+  seconds REAL
 );
 
 CREATE INDEX IF NOT EXISTS idx_render_jobs_composition ON render_jobs(composition_id);

@@ -17,7 +17,7 @@ Agents are already good at writing motion graphics as code. Where it gets hard i
 - **Catches what would render wrong**: every save runs HyperFrames' own linter, so a title a GSAP tween knocks off centre or a timeline that never plays shows up as an issue with its fix before you export, and **Ask AI to fix** hands the list to your agent.
 - **Live preview**: one clock keeps the preview and the timeline in sync.
 - **Bring your own media**: upload logos, photos, product clips and sound in the Media sidebar and click one to put it in the video at the playhead, or reference it by path (`assets/your-logo.png`) in the HTML.
-- **Export when you need a file**: the preview is the video, so nothing renders until you export. Export makes a real MP4, downloads it and keeps it in your media library.
+- **Export when you need a file**: the preview is the video, so nothing renders until you export. Export makes a real MP4 in the background, downloads it when it is ready and keeps it in your media library. A long video or a closed tab loses nothing: reopen the video and the export picks up where it was.
 - **Agent-ready**: a REST API (`/api/compositions`, `/api/assets`, `/api/renders`) and an `agent.md`, so an agent can author and render videos on its own.
 
 ## How a composition works

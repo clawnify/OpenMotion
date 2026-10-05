@@ -1,6 +1,5 @@
+import { startVideoRender, type ServicesEnv } from "@clawnify/services";
 import { getUploadBytes } from "./uploads";
-
-const DEFAULT_SERVICES_URL = "https://services.clawnify.com";
 
 interface Asset {
   key: string;
@@ -11,8 +10,6 @@ interface RenderArgs {
   fps: number;
   assets: Asset[];
   filename: string;
-  servicesUrl?: string;
-  token: string;
 }
 
 function bytesToBase64(buf: ArrayBuffer): string {
@@ -26,50 +23,31 @@ function bytesToBase64(buf: ArrayBuffer): string {
 }
 
 /**
- * Render a composition to MP4 via the managed Clawnify render service
- * (services.clawnify.com/video/render — a Cloudflare Sandbox running
- * HyperFrames). Only the assets actually referenced by the HTML are shipped,
- * inline as base64 (the app's R2 uploads sit behind perimeter auth, so we
- * can't hand the service a fetchable URL).
+ * Start rendering a composition to MP4 on the managed Clawnify render service
+ * (services.clawnify.com/video/render, HyperFrames in a container) and return
+ * the service's job id at once. The render runs to the end on its own; poll it
+ * with getVideoRender (see exports.ts). Only the assets the HTML references are
+ * shipped, inline as base64: the app's R2 uploads sit behind perimeter auth,
+ * so the service cannot be handed a fetchable URL.
  *
- * Returns the MP4 bytes. Throws with the service's error detail on failure.
+ * Throws with the service's error detail when it refuses the job.
  */
-export async function renderComposition(args: RenderArgs): Promise<ArrayBuffer> {
+export async function startRender(env: ServicesEnv, args: RenderArgs): Promise<string> {
   const referenced = args.assets.filter((a) => args.html.includes(`assets/${a.key}`));
 
-  const assetPayload = [];
+  const assets = [];
   for (const a of referenced) {
     const bytes = await getUploadBytes(a.key);
     if (!bytes) continue;
-    assetPayload.push({ path: a.key, data_base64: bytesToBase64(bytes) });
+    assets.push({ path: a.key, dataBase64: bytesToBase64(bytes) });
   }
 
-  const base = args.servicesUrl || DEFAULT_SERVICES_URL;
-  const res = await fetch(`${base}/video/render`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${args.token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      html: args.html,
-      fps: args.fps,
-      format: "mp4",
-      filename: args.filename,
-      assets: assetPayload,
-    }),
+  const job = await startVideoRender(env, {
+    html: args.html,
+    fps: args.fps as 24 | 30 | 60,
+    format: "mp4",
+    filename: args.filename,
+    assets,
   });
-
-  if (!res.ok) {
-    let detail = `render service returned ${res.status}`;
-    try {
-      const j = (await res.json()) as { error?: string; detail?: string };
-      detail = j.detail || j.error || detail;
-    } catch {
-      /* non-JSON error body */
-    }
-    throw new Error(detail);
-  }
-
-  return res.arrayBuffer();
+  return job.job_id;
 }
