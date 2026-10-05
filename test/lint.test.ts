@@ -68,6 +68,19 @@ test("a product demo's many stills are not reported: the fix (separate files) ca
   assert.equal(lint.warnings, 0);
 });
 
+test("a scene wrapper with its own inner layout is not flagged", async () => {
+  // HyperFrames asks to move such a scene into a sub-composition file, which a
+  // one-document composition cannot do, and the scene renders fine as it is.
+  const scene =
+    '<div id="s1" class="clip" data-start="0" data-duration="2" data-track-index="2">' +
+    '<div id="s1i" style="position:absolute;inset:0"><h2>One</h2></div></div>\n  <script';
+  const html = STARTER.replace("<script", scene);
+  assert.notEqual(html, STARTER);
+  const lint = await lintComposition(html);
+  assert.ok(lint && !lint.findings.some((f) => f.code === "nested_structure_needs_subcomposition"), JSON.stringify(lint));
+  assert.equal(lint.warnings, 0, JSON.stringify(lint));
+});
+
 test("a split demo with its clip and the clip's audio lints clean", async () => {
   const { screenDemoHtml } = await import("../src/shared/screen-demo.ts");
   const steps = [{ src: "assets/s1.png", seconds: 3, click: { x: 10, y: 10, w: 20, h: 20 } }, { src: "assets/s2.png", seconds: 3 }];
