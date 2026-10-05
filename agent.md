@@ -181,10 +181,13 @@ and a **presenter**, a photo of a person animated to speak a voice clip
 user, or the user says that person agreed to be animated. Never for anyone
 else, a public figure included. The app records who confirmed it, and when.
 
-**Cost.** fal.ai bills per second of video, about $0.07 at 480p and $0.14 at
-720p. Voice clips over `max_seconds` (60 unless raised, at most 300) are
-refused before anything is spent, with what they would cost: raise
-`max_seconds` only when the user has agreed to that length.
+**Cost: ask first.** fal.ai bills the user per second of video, rounded up:
+about $0.07 at 480p and $0.14 at 720p. Before `POST /api/presenters`, tell the
+user what it will cost (the voice clip's `duration` from `GET /api/assets`,
+times that rate) and wait for a yes. Voice clips over `max_seconds` (60 unless
+raised, at most 300) are refused before anything is spent, with what they would
+cost: raise `max_seconds` only when the user has agreed to that length and
+price.
 
 **Say it is generated.** A presenter is an AI-generated likeness (its library
 name ends in "(AI presenter)"). Wherever the video is published, say so, for
@@ -369,7 +372,7 @@ captions only to a demo you will not rebuild.
 | POST | `/api/speech` | Script to speech `{ voice_id, script }` → an MP3 asset |
 | POST | `/api/presenters` | Photo + voice clip to a talking-head video `{ image_asset_id, audio_asset_id, consent: true }` → the job at once |
 | GET  | `/api/presenters/{id}` | One presenter: poll it until `status` is `completed` (`asset_id`) or `failed` |
-| GET  | `/api/presenters` | List presenters, newest first |
+| GET  | `/api/presenters` | List presenters, newest first: `?limit=` (default 20), `?before=<id>` for older |
 | POST | `/api/renders` | Export an MP4 `{ composition_id }` (only when a file is asked for) → returns the job at once |
 | GET  | `/api/renders/{id}` | One export: poll it until `status` is `completed` or `failed` |
 | GET  | `/api/renders` | List exports, newest first: `?composition_id=`, `?limit=` (default 50, max 100), `?before=<id>` for older |

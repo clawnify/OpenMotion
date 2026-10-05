@@ -57,11 +57,21 @@ export interface PresenterJob {
 /** A job still generating, with where fal says it is. Never stored. */
 export type PresenterView = PresenterJob & { phase?: "queued" | "running" };
 
+/** fal no longer has the finished video (it expired before anyone saved it). */
+export class OutputGone extends Error {}
+
 export interface SettleIO {
   status(job: PresenterJob): Promise<"IN_QUEUE" | "IN_PROGRESS" | "COMPLETED">;
+  /** Throws when fal can't answer right now; an answer of failure comes back as `{ error }`. */
   result(job: PresenterJob): Promise<{ videoUrl: string } | { error: string }>;
-  /** Copy the finished video into the app's uploads under `key`; returns its size in bytes. */
+  /**
+   * Copy the finished video into the app's uploads under `key`; returns its
+   * size in bytes. Throws OutputGone when fal no longer has it, anything else
+   * when the copy should be tried again.
+   */
   keep(url: string, key: string): Promise<number>;
+  /** Best effort: ask fal to drop its copy, once ours is saved. */
+  discard(job: PresenterJob): Promise<void>;
   /** The media-library asset for `key`, made if it is missing. Returns its id. */
   asset(key: string, size: number, job: PresenterJob): Promise<string>;
   update(id: string, patch: Partial<Pick<PresenterJob, "status" | "asset_id" | "error">>): Promise<void>;
@@ -100,12 +110,21 @@ export async function settle(job: PresenterJob, io: SettleIO, now = Date.now()):
     return { ...job, phase: status === "IN_PROGRESS" ? "running" : "queued" };
   }
 
+  // A transient error asking for the result or copying the video throws, so
+  // the job stays generating and the next look tries again.
   const out = await io.result(job);
   if ("error" in out) return fail(out.error);
   const key = presenterKey(job.fal_request_id);
-  const size = await io.keep(out.videoUrl, key);
+  let size;
+  try {
+    size = await io.keep(out.videoUrl, key);
+  } catch (err) {
+    if (err instanceof OutputGone) return fail("The video expired at fal.ai before it was saved. Generate it again.");
+    throw err;
+  }
   const assetId = await io.asset(key, size, job);
   await io.update(job.id, { status: "completed", asset_id: assetId });
+  await io.discard(job).catch(() => undefined);
   return { ...job, status: "completed", asset_id: assetId };
 }
 

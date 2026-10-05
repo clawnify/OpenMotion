@@ -19,11 +19,12 @@ import { capturePage, outlinePage, getVideoRender, ClawnifyServicesError, type C
 import { connect, type ConnectionsEnv, type CredentialBinding } from "@clawnify/connections";
 import { caller, user } from "@clawnify/app";
 import { audioDurationSeconds } from "./audio-duration";
-import { ProviderError, falResult, falStatus, listVoices, speak, submitAurora } from "./providers";
+import { ProviderError, deleteFalOutput, falResult, falStatus, isTransient, listVoices, speak, submitAurora } from "./providers";
 import {
   DEFAULT_MAX_SECONDS,
   HARD_MAX_SECONDS,
   IMAGE_TYPES,
+  OutputGone,
   audioProblem,
   costUsd,
   dataUri,
@@ -780,8 +781,12 @@ const presenterBody = z
   })
   .strict();
 
-/** Under the app Worker's memory once inlined as base64 (the photo and voice travel to fal.ai inside the request). */
-const MAX_INLINE_BYTES = 15 * 1024 * 1024;
+/**
+ * The photo and voice travel to fal.ai inside the request, as base64 in JSON:
+ * roughly four copies in memory at once, so 8 MB stays well inside the app
+ * Worker's 128 MB. A minute of 128 kbps MP3 is about 1 MB, a photo a few MB.
+ */
+const MAX_INLINE_BYTES = 8 * 1024 * 1024;
 
 // Photo + voice clip -> a video of that person speaking, generated at fal.ai in
 // the background. Answers 202 with the job; GET /api/presenters/:id finishes it.
@@ -798,7 +803,7 @@ app.post("/api/presenters", async (c) => {
   const audio = await get<Asset>("SELECT * FROM assets WHERE id = ?", [b.audio_asset_id]);
   if (!audio) return c.json({ error: "audio_asset_id: no such asset" }, 404);
   if (image.size + audio.size > MAX_INLINE_BYTES) {
-    return c.json({ error: "The photo and voice clip together are over 15 MB. Use a smaller photo or a shorter clip." }, 413);
+    return c.json({ error: "The photo and voice clip together are over 8 MB. Use a smaller photo or a shorter clip." }, 413);
   }
 
   const key = await providerKey(c.env, "falai");
@@ -854,6 +859,8 @@ function presenterIO(env: Bindings, falKey: string): PresenterIO {
     result: (job) => falResult(falKey, job.fal_response_url),
     async keep(url, key) {
       const res = await fetch(url);
+      // A 4xx from fal's CDN means the file is gone (expired); waiting won't bring it back.
+      if (!res.ok && !isTransient(res.status)) throw new OutputGone(`fal.ai answered ${res.status} for the video`);
       if (!res.ok || !res.body) throw new Error(`could not fetch the finished video from fal.ai (${res.status})`);
       const length = Number(res.headers.get("content-length"));
       if (length > 0) {
@@ -864,6 +871,7 @@ function presenterIO(env: Bindings, falKey: string): PresenterIO {
       await putUpload(key, bytes, "video/mp4");
       return bytes.byteLength;
     },
+    discard: (job) => deleteFalOutput(falKey, job.fal_request_id),
     async asset(key, size, job) {
       await run(
         "INSERT OR IGNORE INTO assets (id, key, name, content_type, size, duration) VALUES (?, ?, ?, 'video/mp4', ?, ?)",
@@ -900,13 +908,20 @@ async function lookPresenter(row: PresenterJob, env: Bindings) {
   return (await get<PresenterJob>("SELECT * FROM presenter_jobs WHERE id = ?", [row.id])) ?? out;
 }
 
-// Newest first. ?before=<created_at> pages back.
+// Newest first. ?before=<id of the last presenter on the page> pages back.
+// created_at has one-second resolution, so the id breaks ties: no row is
+// skipped or repeated when several start in the same second.
 app.get("/api/presenters", async (c) => {
   const limit = Math.min(Math.max(Number(c.req.query("limit")) || 20, 1), 100);
   const before = c.req.query("before");
+  const after = before
+    ? await get<{ created_at: string; id: string }>("SELECT created_at, id FROM presenter_jobs WHERE id = ?", [before])
+    : null;
+  if (before && !after) return c.json({ error: "before: no such presenter" }, 404);
   const rows = await query<PresenterJob>(
-    `SELECT * FROM presenter_jobs ${before ? "WHERE created_at < ?" : ""} ORDER BY created_at DESC LIMIT ?`,
-    before ? [before, limit] : [limit],
+    `SELECT * FROM presenter_jobs ${after ? "WHERE created_at < ? OR (created_at = ? AND id < ?)" : ""}
+     ORDER BY created_at DESC, id DESC LIMIT ?`,
+    after ? [after.created_at, after.created_at, after.id, limit] : [limit],
   );
   return c.json(await Promise.all(rows.map((r) => lookPresenter(r, c.env))));
 });

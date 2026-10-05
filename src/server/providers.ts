@@ -9,14 +9,18 @@ const FAL_QUEUE = "https://queue.fal.run";
 const ELEVENLABS = "https://api.elevenlabs.io";
 
 /**
- * Keep nothing at fal.ai: no stored request payloads (X-Fal-Store-IO; fal's
- * default keeps them 30 days), and the output off fal's CDN after an hour (its
- * default is forever, readable by anyone with the link). The app copies the
- * video into its own storage the first time anyone looks at a finished job.
+ * Keep as little as possible at fal.ai: no stored request payloads
+ * (X-Fal-Store-IO; fal's default keeps them 30 days), and the output off fal's
+ * CDN after a week (its default is forever, readable by anyone with the
+ * unguessable link). The app copies the video into its own storage the first
+ * time anyone looks at a finished job, then asks fal to delete it (see
+ * deleteFalOutput), so the week only matters for a job nobody looks at. It must
+ * outlast that look: a shorter expiry loses a video already paid for.
  */
+const FAL_OUTPUT_SECONDS = 7 * 24 * 60 * 60;
 const FAL_NO_RETENTION = {
   "X-Fal-Store-IO": "0",
-  "X-Fal-Object-Lifecycle-Preference": JSON.stringify({ expiration_duration_seconds: 3600 }),
+  "X-Fal-Object-Lifecycle-Preference": JSON.stringify({ expiration_duration_seconds: FAL_OUTPUT_SECONDS }),
 };
 
 export class ProviderError extends Error {
@@ -152,13 +156,20 @@ export async function falStatus(apiKey: string, statusUrl: string): Promise<FalS
   return ((await res.json()) as { status: FalStatus }).status;
 }
 
+/** fal could not answer right now (5xx, 429): ask again later, nothing is decided. */
+export function isTransient(status: number): boolean {
+  return status >= 500 || status === 429;
+}
+
 /**
  * A completed job's video link, or why it failed. A request that failed at fal
- * still reports COMPLETED; its result answers with an error instead.
+ * still reports COMPLETED; its result answers with an error instead. A
+ * transient answer (5xx, 429) throws, so the job is not failed over a blip.
  */
 export async function falResult(apiKey: string, responseUrl: string): Promise<{ videoUrl: string } | { error: string }> {
   if (!isFalQueueUrl(responseUrl)) return { error: "not a fal.ai queue link" };
   const res = await fetch(responseUrl, { headers: { Authorization: `Key ${apiKey}` } });
+  if (!res.ok && isTransient(res.status)) throw await failure("fal", res);
   if (!res.ok) return { error: `fal.ai answered ${res.status}: ${(await res.text().catch(() => "")).slice(0, 1000)}` };
   const body = (await res.json().catch(() => null)) as { video?: { url?: unknown } } | null;
   const url = body?.video?.url;
@@ -166,4 +177,17 @@ export async function falResult(apiKey: string, responseUrl: string): Promise<{ 
     return { error: `fal.ai returned no video: ${JSON.stringify(body).slice(0, 500)}` };
   }
   return { videoUrl: url };
+}
+
+/**
+ * Ask fal to delete a request's output from its CDN, once the app holds its
+ * own copy. fal's docs say this needs an admin key, which the user's key may
+ * not be, so it is best effort: on refusal the output still expires (see
+ * FAL_OUTPUT_SECONDS).
+ */
+export async function deleteFalOutput(apiKey: string, requestId: string): Promise<void> {
+  await fetch(`https://api.fal.ai/v1/models/requests/${encodeURIComponent(requestId)}/payloads`, {
+    method: "DELETE",
+    headers: { Authorization: `Key ${apiKey}` },
+  }).catch(() => undefined);
 }

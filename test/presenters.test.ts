@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  OutputGone,
   STALL_MS,
   audioProblem,
   costUsd,
@@ -12,7 +13,7 @@ import {
   type SettleIO,
 } from "../src/server/presenters.ts";
 import { audioDurationSeconds } from "../src/server/audio-duration.ts";
-import { falStatus, listVoices, speak, submitAurora } from "../src/server/providers.ts";
+import { falResult, falStatus, listVoices, speak, submitAurora } from "../src/server/providers.ts";
 
 const NOW = Date.parse("2026-10-05T12:00:00Z");
 
@@ -41,8 +42,15 @@ function job(over: Partial<PresenterJob> = {}): PresenterJob {
   };
 }
 
-/** A fake world where fal says `status` (or can't be reached) and answers `result`; every call is recorded. */
-function io(status: "IN_QUEUE" | "IN_PROGRESS" | "COMPLETED" | Error, result: { videoUrl: string } | { error: string } = { videoUrl: "https://v3b.fal.media/out.mp4" }) {
+/**
+ * A fake world where fal says `status` (or can't be reached), answers `result`
+ * (or throws it), and the copy succeeds or throws `keepFails`. Every call is recorded.
+ */
+function io(
+  status: "IN_QUEUE" | "IN_PROGRESS" | "COMPLETED" | Error,
+  result: { videoUrl: string } | { error: string } | Error = { videoUrl: "https://v3b.fal.media/out.mp4" },
+  keepFails?: Error,
+) {
   const calls: string[] = [];
   const updates: unknown[] = [];
   const fake: SettleIO = {
@@ -53,11 +61,17 @@ function io(status: "IN_QUEUE" | "IN_PROGRESS" | "COMPLETED" | Error, result: { 
     },
     async result() {
       calls.push("result");
+      if (result instanceof Error) throw result;
       return result;
     },
     async keep(url, key) {
       calls.push(`keep ${url} -> ${key}`);
+      if (keepFails) throw keepFails;
       return 2_434_324;
+    },
+    async discard(j) {
+      calls.push(`discard ${j.fal_request_id}`);
+      throw new Error("fal refused: not an admin key");
     },
     async asset(key, size) {
       calls.push(`asset ${key} ${size}`);
@@ -83,11 +97,13 @@ test("a generating presenter reports where fal has it, and changes nothing", asy
 test("a finished presenter is copied in, registered as generated media, and completed", async () => {
   const w = io("COMPLETED");
   const out = await settle(job(), w.fake, NOW);
+  // fal is asked to drop its copy once ours is saved; a refusal (here) changes nothing.
   assert.deepEqual(w.calls, [
     "status",
     "result",
     "keep https://v3b.fal.media/out.mp4 -> presenters/req-1.mp4",
     "asset presenters/req-1.mp4 2434324",
+    "discard req-1",
   ]);
   assert.deepEqual(w.updates, [{ id: "p1", status: "completed", asset_id: "asset-9" }]);
   assert.equal(out.status, "completed");
@@ -101,6 +117,21 @@ test("a generation fal failed is marked failed with fal's reason", async () => {
   assert.equal(out.status, "failed");
   assert.match(out.error ?? "", /face not detected/);
   assert.ok(!w.calls.some((c) => c.startsWith("keep")));
+});
+
+test("a video that expired at fal before anyone saved it fails the job, instead of generating forever", async () => {
+  const w = io("COMPLETED", undefined, new OutputGone("fal.ai answered 404 for the video"));
+  const out = await settle(job(), w.fake, NOW);
+  assert.equal(out.status, "failed");
+  assert.match(out.error ?? "", /expired at fal\.ai before it was saved/);
+  assert.ok(!w.calls.some((c) => c.startsWith("asset")));
+});
+
+test("a blip asking for the result or copying the video keeps the paid job for the next look", async () => {
+  for (const w of [io("COMPLETED", new Error("fal.ai answered 502")), io("COMPLETED", undefined, new Error("connection reset"))]) {
+    await assert.rejects(settle(job(), w.fake, NOW));
+    assert.deepEqual(w.updates, []);
+  }
 });
 
 test("fal unreachable for a moment leaves the job as it was; one stuck for hours fails", async () => {
@@ -200,7 +231,8 @@ test("fal.ai is asked to keep nothing, and the key never leaves fal's queue host
   assert.equal(sent[0].url, "https://queue.fal.run/fal-ai/creatify/aurora");
   assert.equal(headers.get("authorization"), "Key fal-key");
   assert.equal(headers.get("x-fal-store-io"), "0");
-  assert.deepEqual(JSON.parse(headers.get("x-fal-object-lifecycle-preference") ?? ""), { expiration_duration_seconds: 3600 });
+  // A week: long enough that a job nobody looks at for a while is still saved.
+  assert.deepEqual(JSON.parse(headers.get("x-fal-object-lifecycle-preference") ?? ""), { expiration_duration_seconds: 604800 });
   assert.deepEqual(JSON.parse(String(sent[0].init?.body)), {
     image_url: "data:image/png;base64,AA",
     audio_url: "data:audio/mpeg;base64,AA",
@@ -209,6 +241,17 @@ test("fal.ai is asked to keep nothing, and the key never leaves fal's queue host
   });
 
   await assert.rejects(falStatus("fal-key", "https://evil.example/status"), /not a fal.ai queue link/);
+});
+
+test("fal's result: a 5xx or 429 is asked again later, a 4xx is the job's failure", async () => {
+  const url = "https://queue.fal.run/fal-ai/creatify/requests/req-1";
+  for (const status of [502, 503, 429]) {
+    const r = withFetch(new Response("busy", { status }), () => falResult("fal-key", url));
+    await assert.rejects(r, new RegExp(`answered ${status}`));
+  }
+  const bad = await withFetch(Response.json({ detail: "face not detected" }, { status: 422 }), () => falResult("fal-key", url));
+  assert.deepEqual(Object.keys(bad.out), ["error"]);
+  assert.match((bad.out as { error: string }).error, /422.*face not detected/);
 });
 
 test("speech passes the voice, model and settings through, and voices come back trimmed and paged", async () => {
