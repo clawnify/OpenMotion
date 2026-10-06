@@ -47,6 +47,20 @@ const MAX_FINDINGS = 10;
 const NOT_HERE = new Set(["timeline_track_too_dense", "nested_structure_needs_subcomposition"]);
 
 /**
+ * audio_volume_tween_overrides_gain warns that a tween on `volume` replaces a
+ * clip's data-volume. On a clip at data-volume="0" whose level the timeline
+ * sets (agent.md: music faded in from silence) that is the intent, and its fix,
+ * "reset data-volume to 1", makes the render's first frame play at full level,
+ * a pop. So it stays only where it means something: a gain the tween drops.
+ */
+function intendedSilentBase(html: string, f: HyperframeLintFinding): boolean {
+  if (f.code !== "audio_volume_tween_overrides_gain" || !f.elementId) return false;
+  const id = f.elementId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const tag = html.match(new RegExp(`<(?:audio|video)\\b[^>]*\\bid="${id}"[^>]*>`))?.[0];
+  return !!tag && /\bdata-volume="0(?:\.0*)?"/.test(tag);
+}
+
+/**
  * The document the renderer actually loads. The render service wraps a bare
  * root <div> in a page (apps/services `toIndexHtml`) and leaves a full
  * document alone, so lint the same thing, or the linter flags the missing
@@ -80,8 +94,10 @@ export async function lintComposition(html: string): Promise<Lint | null> {
     const { lintHyperframeHtml } = await import("@hyperframes/lint/browser");
     const result = await lintHyperframeHtml(asRendered(html));
     // "info" findings are advice about fonts and the like, not problems.
-    // NOT_HERE are rules whose fix cannot be made in this app (see below).
-    const real = byImportance(result.findings.filter((f) => f.severity !== "info" && !NOT_HERE.has(f.code)));
+    // NOT_HERE are rules whose fix cannot be made in this app (see above).
+    const real = byImportance(
+      result.findings.filter((f) => f.severity !== "info" && !NOT_HERE.has(f.code) && !intendedSilentBase(html, f)),
+    );
     return {
       errors: real.filter((f) => f.severity === "error").length,
       warnings: real.filter((f) => f.severity === "warning").length,

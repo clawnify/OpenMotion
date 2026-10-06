@@ -197,6 +197,64 @@ example a caption "AI-generated presenter" in the video or in the post.
 connects fal.ai or ElevenLabs under Integrations; self-hosted, the app reads
 `FAL_KEY` and `ELEVENLABS_API_KEY`.
 
+## Music and sound effects (generated)
+
+Don't synthesise sound in code (oscillators, Web Audio beeps): it renders as
+thin "ticky" synth noise that cheapens the picture. When the video needs sound,
+make it from the user's ElevenLabs account, the same connection as their voices
+(it uses their ElevenLabs credits), or use a track they uploaded.
+
+- **Music bed:** `POST /api/music { prompt, seconds }` (optional
+  `instrumental`, default `true`; `music_model`; `name`) answers with an MP3
+  asset when the track is done, tens of seconds for a short one. `seconds` is
+  the video's length (3 to 600): a clip that runs past the end makes the video
+  longer. Describe genre, mood, instruments and tempo ("warm lo-fi beat, soft
+  keys, 90 bpm, no drums in the first 4 seconds"). Keep it instrumental under a
+  voiceover; sung lyrics fight the voice.
+- **Sound effect:** `POST /api/sound-effects { prompt }` (optional `seconds`
+  0.5 to 30, `loop` for an ambience that repeats seamlessly,
+  `prompt_influence` 0 to 1, `name`). One file per kind of sound ("soft
+  whoosh", "mouse click", "riser into a reveal"); reuse it wherever that sound
+  recurs, each use its own `<audio>` with its own `id`.
+
+Put each in the video as an `<audio class="clip">` on a lane of its own:
+
+```html
+<audio id="music" class="clip" src="assets/music/3f9c....mp3"
+       data-start="0" data-duration="31.6" data-track-index="9" data-volume="0"></audio>
+<audio id="whoosh-2" class="clip" src="assets/sfx/a81e....mp3"
+       data-start="4.1" data-duration="0.8" data-track-index="10" data-volume="0.6"></audio>
+```
+
+**Mixing.** Speech is the loudest thing in the video, music sits under it. A
+sound effect keeps one level, its `data-volume`. The music's level comes from
+the timeline: give it `data-volume="0"` and set every level with `fromTo`,
+starting at the clip's own start. Fade it in, hold it low under the voice, and
+fade it out by the end:
+
+```js
+tl.fromTo("#music", { volume: 0 }, { volume: 0.25, duration: 1 }, 0);
+tl.fromTo("#music", { volume: 0.25 }, { volume: 0, duration: 1.5, immediateRender: false }, 30.1);
+```
+
+Never `tl.to` on `volume`: in the render it starts from the clip's
+`data-volume`, not from where the last tween left it (a fade-out meant to start
+at 0.25 jumps to full volume first). And never leave `data-volume` at 1 under a fade-in:
+the first frame plays at full level, an audible pop. Every `fromTo` after the
+first on the same clip takes `immediateRender: false` in its second object,
+or its start level leaks to before it begins (as above).
+
+0.25 holds the music about 12 dB under a voiceover. Without a voice, hold it
+higher (0.6 to 0.8). Start a sound effect a frame or two before the motion it
+belongs to (a whoosh as a slide begins, a click as the cursor lands), and keep
+effects sparse: one per transition or tap, not on every element.
+
+**Key without the permission:** a 502 saying the API key "is missing the
+permission music_generation" (or `sound_generation`) means the user's
+ElevenLabs key is restricted. Nothing was made or charged. They turn on Music
+or Sound Effects for that key in ElevenLabs (or connect a key that has them),
+then ask again.
+
 ## Product demos of a web app (screen-recording style)
 
 When the user asks for a demo, walkthrough or "screen recording" of a web app
@@ -370,6 +428,8 @@ captions only to a demo you will not rebuild.
 | GET  | `/api/assets` | List uploaded media |
 | GET  | `/api/voices` | The user's ElevenLabs voices: `?search=`, `?category=`, `?page_token=` |
 | POST | `/api/speech` | Script to speech `{ voice_id, script }` → an MP3 asset |
+| POST | `/api/music` | A music bed from a prompt `{ prompt, seconds }` → an MP3 asset |
+| POST | `/api/sound-effects` | A sound effect from a prompt `{ prompt }` → an MP3 asset |
 | POST | `/api/presenters` | Photo + voice clip to a talking-head video `{ image_asset_id, audio_asset_id, consent: true }` → the job at once |
 | GET  | `/api/presenters/{id}` | One presenter: poll it until `status` is `completed` (`asset_id`) or `failed` |
 | GET  | `/api/presenters` | List presenters, newest first: `?limit=` (default 20), `?before=<id>` for older |

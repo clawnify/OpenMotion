@@ -13,7 +13,7 @@ import {
   type SettleIO,
 } from "../src/server/presenters.ts";
 import { audioDurationSeconds } from "../src/server/audio-duration.ts";
-import { falResult, falStatus, listVoices, speak, submitAurora } from "../src/server/providers.ts";
+import { composeMusic, falResult, falStatus, listVoices, soundEffect, speak, submitAurora } from "../src/server/providers.ts";
 
 const NOW = Date.parse("2026-10-05T12:00:00Z");
 
@@ -271,4 +271,36 @@ test("speech passes the voice, model and settings through, and voices come back 
     voices: [{ voice_id: "v1", name: "Ric", category: "cloned", description: null, labels: { accent: "italian" }, preview_url: "https://x/p.mp3" }],
     next_page_token: "t2",
   });
+});
+
+test("music asks for its length in ms, no vocals unless allowed, and a plain MP3", async () => {
+  const { sent } = await withFetch(new Response(new Uint8Array([0xff, 0xfb])), () =>
+    composeMusic("el-key", { prompt: "warm lo-fi beat", seconds: 31.6, instrumental: true }),
+  );
+  assert.equal(sent[0].url, "https://api.elevenlabs.io/v1/music?output_format=mp3_44100_128");
+  assert.equal(new Headers(sent[0].init?.headers).get("xi-api-key"), "el-key");
+  assert.deepEqual(JSON.parse(String(sent[0].init?.body)), { prompt: "warm lo-fi beat", music_length_ms: 31600, force_instrumental: true });
+
+  const withModel = await withFetch(new Response(new Uint8Array([0xff, 0xfb])), () =>
+    composeMusic("el-key", { prompt: "choir", seconds: 10, instrumental: false, modelId: "music_v2" }),
+  );
+  assert.deepEqual(JSON.parse(String(withModel.sent[0].init?.body)), { prompt: "choir", music_length_ms: 10000, force_instrumental: false, model_id: "music_v2" });
+
+  await assert.rejects(
+    withFetch(Response.json({ detail: { status: "limited_access" } }, { status: 402 }), () =>
+      composeMusic("el-key", { prompt: "x", seconds: 5, instrumental: true }),
+    ),
+    /ElevenLabs answered 402: .*limited_access/,
+  );
+});
+
+test("a sound effect sends only what was asked, so ElevenLabs' own defaults apply", async () => {
+  const bare = await withFetch(new Response(new Uint8Array([0xff, 0xfb])), () => soundEffect("el-key", { prompt: "soft whoosh" }));
+  assert.equal(bare.sent[0].url, "https://api.elevenlabs.io/v1/sound-generation?output_format=mp3_44100_128");
+  assert.deepEqual(JSON.parse(String(bare.sent[0].init?.body)), { text: "soft whoosh" });
+
+  const full = await withFetch(new Response(new Uint8Array([0xff, 0xfb])), () =>
+    soundEffect("el-key", { prompt: "rain on a window", seconds: 8, loop: true, promptInfluence: 0 }),
+  );
+  assert.deepEqual(JSON.parse(String(full.sent[0].init?.body)), { text: "rain on a window", duration_seconds: 8, loop: true, prompt_influence: 0 });
 });

@@ -1,4 +1,5 @@
-// The two providers behind voices and presenters: ElevenLabs (speech) and
+// The two providers behind voices and presenters: ElevenLabs (speech, music,
+// sound effects) and
 // fal.ai (a photo animated to speak). Each is called with the user's own key,
 // so each bills the user directly. index.ts finds the key (a Clawnify
 // connection, or an env var when self-hosted) and hands it in.
@@ -99,6 +100,62 @@ export async function speak(apiKey: string, req: SpeechRequest): Promise<Uint8Ar
       text: req.text,
       ...(req.modelId ? { model_id: req.modelId } : {}),
       ...(req.voiceSettings ? { voice_settings: req.voiceSettings } : {}),
+    }),
+  });
+  if (!res.ok) throw await failure("elevenlabs", res);
+  return new Uint8Array(await res.arrayBuffer());
+}
+
+export interface MusicRequest {
+  prompt: string;
+  /** 3 to 600 seconds (ElevenLabs' range). */
+  seconds: number;
+  /** No vocals, whatever the prompt says. */
+  instrumental: boolean;
+  /** ElevenLabs model; theirs is music_v1 when omitted. */
+  modelId?: string;
+}
+
+/**
+ * A piece of music from a prompt, at a set length. MP3, 44.1 kHz, 128 kbps,
+ * named explicitly: their "auto" picks 192 kbps for newer models, which not
+ * every plan may download.
+ */
+export async function composeMusic(apiKey: string, req: MusicRequest): Promise<Uint8Array> {
+  const res = await fetch(`${ELEVENLABS}/v1/music?output_format=mp3_44100_128`, {
+    method: "POST",
+    headers: { "xi-api-key": apiKey, "Content-Type": "application/json", Accept: "audio/mpeg" },
+    body: JSON.stringify({
+      prompt: req.prompt,
+      music_length_ms: Math.round(req.seconds * 1000),
+      force_instrumental: req.instrumental,
+      ...(req.modelId ? { model_id: req.modelId } : {}),
+    }),
+  });
+  if (!res.ok) throw await failure("elevenlabs", res);
+  return new Uint8Array(await res.arrayBuffer());
+}
+
+export interface SoundEffectRequest {
+  prompt: string;
+  /** 0.5 to 30 seconds; ElevenLabs guesses from the prompt when omitted. */
+  seconds?: number;
+  /** Ends where it starts, to repeat seamlessly (an ambience under a scene). */
+  loop?: boolean;
+  /** 0 to 1: higher follows the prompt more literally. Theirs is 0.3. */
+  promptInfluence?: number;
+}
+
+/** A sound effect from a prompt: a whoosh, a click, a riser. MP3, 44.1 kHz, 128 kbps. */
+export async function soundEffect(apiKey: string, req: SoundEffectRequest): Promise<Uint8Array> {
+  const res = await fetch(`${ELEVENLABS}/v1/sound-generation?output_format=mp3_44100_128`, {
+    method: "POST",
+    headers: { "xi-api-key": apiKey, "Content-Type": "application/json", Accept: "audio/mpeg" },
+    body: JSON.stringify({
+      text: req.prompt,
+      ...(req.seconds !== undefined ? { duration_seconds: req.seconds } : {}),
+      ...(req.loop ? { loop: true } : {}),
+      ...(req.promptInfluence !== undefined ? { prompt_influence: req.promptInfluence } : {}),
     }),
   });
   if (!res.ok) throw await failure("elevenlabs", res);
