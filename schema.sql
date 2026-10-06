@@ -38,7 +38,14 @@ CREATE TABLE IF NOT EXISTS assets (
   -- it from the local file instantly). Data, not a runtime probe — the
   -- timeline needs it synchronously, and moov-at-end files make network
   -- probing arbitrarily slow.
-  duration REAL
+  duration REAL,
+  -- A sound's measure, read from its samples on the server (audio-measure.ts):
+  -- integrated loudness in LUFS, and seconds to its loudest sample, as it
+  -- plays. Both null for silence or a format the app cannot decode;
+  -- measured_at says it was tried, so it is tried once.
+  loudness REAL,
+  peak_at REAL,
+  measured_at TEXT
 );
 
 -- Render jobs: one row per render. The MP4 is stored in R2 and served from

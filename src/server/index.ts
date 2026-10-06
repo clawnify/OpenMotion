@@ -19,6 +19,7 @@ import { capturePage, outlinePage, getVideoRender, ClawnifyServicesError, type C
 import { connect, type ConnectionsEnv, type CredentialBinding } from "@clawnify/connections";
 import { caller, user } from "@clawnify/app";
 import { audioDurationSeconds } from "./audio-duration";
+import { measureAudio } from "./audio-measure";
 import {
   ProviderError,
   composeMusic,
@@ -492,12 +493,32 @@ app.post("/api/assets", async (c) => {
   const durRaw = Number(body["duration"]);
   const duration = Number.isFinite(durRaw) && durRaw > 0 ? durRaw : null;
 
+  // A sound is measured now, so an agent mixing it has its numbers at once.
+  const measure = contentType.startsWith("audio/") ? await measureAudio(new Uint8Array(data)) : undefined;
+
   const res = await run(
-    "INSERT INTO assets (key, name, content_type, size, duration) VALUES (?, ?, ?, ?, ?)",
-    [key, file.name || key, contentType, data.byteLength, duration],
+    `INSERT INTO assets (key, name, content_type, size, duration, loudness, peak_at, measured_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ${measure === undefined ? "NULL" : "datetime('now')"})`,
+    [key, file.name || key, contentType, data.byteLength, duration, measure?.loudness ?? null, measure?.peak_at ?? null],
   );
   const row = await get<Asset>("SELECT * FROM assets WHERE rowid = ?", [res.lastInsertRowid]);
   return c.json(row, 201);
+});
+
+// One asset. A sound from before the app measured sounds is measured on its
+// first read here, once (measured_at), and keeps its numbers.
+app.get("/api/assets/:id", async (c) => {
+  const row = await get<Asset & { measured_at: string | null }>("SELECT * FROM assets WHERE id = ?", [c.req.param("id")]);
+  if (!row) return c.json({ error: "Not found" }, 404);
+  if (row.measured_at || !row.content_type.startsWith("audio/")) return c.json(row);
+  const bytes = await getUploadBytes(row.key);
+  const measure = bytes ? await measureAudio(new Uint8Array(bytes)) : null;
+  await run("UPDATE assets SET loudness = ?, peak_at = ?, measured_at = datetime('now') WHERE id = ?", [
+    measure?.loudness ?? null,
+    measure?.peak_at ?? null,
+    row.id,
+  ]);
+  return c.json(await get<Asset>("SELECT * FROM assets WHERE id = ?", [row.id]));
 });
 
 // Backfill a probed duration onto a legacy asset (self-healing library).
@@ -774,13 +795,12 @@ async function saveMp3(audio: Uint8Array, folder: string, name: string): Promise
   const assetKey = `${folder}/${lower16()}.mp3`;
   await putUpload(assetKey, audio, "audio/mpeg");
   const id = lower16();
-  await run("INSERT INTO assets (id, key, name, content_type, size, duration) VALUES (?, ?, ?, 'audio/mpeg', ?, ?)", [
-    id,
-    assetKey,
-    `${name}.mp3`,
-    audio.byteLength,
-    audioDurationSeconds(audio),
-  ]);
+  const measure = await measureAudio(audio);
+  await run(
+    `INSERT INTO assets (id, key, name, content_type, size, duration, loudness, peak_at, measured_at)
+     VALUES (?, ?, ?, 'audio/mpeg', ?, ?, ?, ?, datetime('now'))`,
+    [id, assetKey, `${name}.mp3`, audio.byteLength, audioDurationSeconds(audio), measure?.loudness ?? null, measure?.peak_at ?? null],
+  );
   return get<Asset>("SELECT * FROM assets WHERE id = ?", [id]);
 }
 

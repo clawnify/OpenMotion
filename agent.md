@@ -118,7 +118,9 @@ HTML by path: `assets/<key>`. Reference it as `<img src="assets/logo.png">` or
 `<video src="assets/demo.mp4">`. At render time the app automatically ships only
 the assets your HTML actually references — you don't attach them manually.
 
-To list what's available: `GET /api/assets` → `[{ key, name, content_type }]`.
+To list what's available: `GET /api/assets` → `[{ id, key, name, content_type,
+duration }]`. A sound also carries `loudness` and `peak_at` (see Music and sound
+effects).
 Use the exact `key` in `assets/<key>`. You can upload too: a multipart
 `POST /api/assets` with the file in the field `file` (and `duration` in seconds
 for a video or sound, when you know it). The key is made from the file name,
@@ -249,14 +251,24 @@ the first frame plays at full level, an audible pop. Every `fromTo` after the
 first on the same clip takes `immediateRender: false` in its second object,
 or its start level leaks to before it begins (as above).
 
-0.12 holds the music about 12 dB under a voiceover: generated beds come out
-near −16 to −18 dB and a voice near −23 dB while it speaks, so 0.25 would leave
-the music only 5 dB under it. Without a voice, hold it at 0.6 to 0.8.
+**Set levels and timing from the numbers, not by guessing.** You cannot hear
+the video, so every sound in the library is measured from its samples:
+`loudness` (integrated loudness in LUFS, the measure ffmpeg's `ebur128`
+reports) and `peak_at` (seconds from its start to its loudest moment, as it
+plays). The asset that `/api/speech`, `/api/music`, `/api/sound-effects` and an
+upload answer with carries them. A sound added before measuring existed gets
+them on its first `GET /api/assets/{id}`. They are `null` for silence or a
+format the app cannot read (only MP3 at 32, 44.1 or 48 kHz, and WAV, are).
 
-A sound effect is loudest about 0.2 to 0.35 s into its file, not at its start,
-so start the clip that much before the moment it belongs to: a click for a
-cursor landing at 4.40 s starts at 4.10. Keep effects sparse: one per
-transition or tap, not on every element.
+- **Music under a voice:** 12 dB under it. Hold the music at
+  `10^((voice.loudness - 12 - music.loudness) / 20)`, e.g. a voice at -20 and
+  music at -14 LUFS: `10^(-18/20)` = 0.13. Without the numbers, 0.12. Without
+  a voice, hold it at 0.6 to 0.8.
+- **An effect on a moment:** start the clip `peak_at` seconds before it, so
+  its hit lands on the moment and not its file start: a click with `peak_at`
+  0.31 for a cursor landing at 4.40 s starts at 4.09. Without the number, 0.3.
+
+Keep effects sparse: one per transition or tap, not on every element.
 
 **If the call times out** before it answers, the track may still arrive:
 each call is billed, so look at `GET /api/assets` (newest first) for it
@@ -438,7 +450,8 @@ captions only to a demo you will not rebuild.
 | POST | `/api/compositions/screen-demo` | Build a product demo from stills you already have |
 | PUT  | `/api/compositions/{id}` | Update any of `name/description/html/fps` → the row with `lint` |
 | DELETE | `/api/compositions/{id}` | Delete |
-| GET  | `/api/assets` | List uploaded media |
+| GET  | `/api/assets` | List the media library (a sound with its `loudness` and `peak_at`) |
+| GET  | `/api/assets/{id}` | One asset; measures an older sound on its first read |
 | GET  | `/api/voices` | The user's ElevenLabs voices: `?search=`, `?category=`, `?page_token=` |
 | POST | `/api/speech` | Script to speech `{ voice_id, script }` → an MP3 asset |
 | POST | `/api/music` | A music bed from a prompt `{ prompt, seconds }` → an MP3 asset |

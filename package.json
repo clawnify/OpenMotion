@@ -20,6 +20,7 @@
     "@radix-ui/react-popover": "^1.1.23",
     "cmdk": "^1.1.1",
     "hono": "^4.6.0",
+    "js-mp3": "0.1.0",
     "lucide-react": "^0.400.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
