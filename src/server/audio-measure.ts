@@ -11,14 +11,16 @@
 //             timing) to its loudest sample. A click's hit, not its file start.
 //
 // A Worker cannot compile WebAssembly at runtime, and the draft tier ships one
-// JavaScript file, so MP3 is decoded in plain JavaScript (js-mp3, a port of
-// go-mp3: MPEG-1 Layer III, what generated speech, music and effects are). WAV
-// is read directly. Anything else is not measured. At most the first
-// MAX_SECONDS are read, which bounds the work for a long upload.
+// JavaScript file, so MP3 is decoded in plain JavaScript (vendor/js-mp3:
+// MPEG-1 Layer III, what generated speech, music and effects are). WAV is read
+// directly. Anything else is not measured. Decoding costs CPU in proportion to
+// length, so only the first MAX_SECONDS are read: a bed's loudness is steady
+// well within that, and an effect is far shorter.
 
 import { findMp3Frame } from "./audio-duration.ts";
+import type { Mp3Frame } from "./vendor/js-mp3/frame";
 
-export const MAX_SECONDS = 120;
+export const MAX_SECONDS = 60;
 
 export interface AudioMeasure {
   /** Integrated loudness, LUFS; null for silence. */
@@ -227,24 +229,14 @@ export function mp3StartSkip(b: Uint8Array, infoTag: number | null, samplesPerFr
   return samplesPerFrame + delay + 529;
 }
 
-interface Mp3Source {
-  pos: number;
-  skipTags(): { err?: unknown };
-}
-interface Mp3Frame {
-  decode(): Uint8Array;
-}
-
 async function measureMp3(b: Uint8Array): Promise<AudioMeasure | null> {
   const first = findMp3Frame(b);
   // js-mp3 decodes MPEG-1 Layer III only (44.1, 48 and 32 kHz).
   if (!first || first.version !== 3) return null;
   // Loaded on first use, like the linter: most requests never measure a sound.
   const [{ default: Mp3 }, { default: Frame }] = await Promise.all([
-    import("js-mp3") as Promise<{ default: { newSource(buf: ArrayBuffer): Mp3Source } }>,
-    import("js-mp3/src/frame.js") as Promise<{
-      default: { read(source: Mp3Source, position: number, prev: Mp3Frame | null): { f: Mp3Frame; err?: unknown } };
-    }>,
+    import("./vendor/js-mp3/decode.js"),
+    import("./vendor/js-mp3/frame.js"),
   ]);
   const buf = b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
   const source = Mp3.newSource(buf);

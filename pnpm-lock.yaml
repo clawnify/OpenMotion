@@ -35,9 +35,6 @@ importers:
       hono:
         specifier: ^4.6.0
         version: 4.12.25
-      js-mp3:
-        specifier: 0.1.0
-        version: 0.1.0
       lucide-react:
         specifier: ^0.400.0
         version: 0.400.0(react@19.2.7)
@@ -1857,9 +1854,6 @@ packages:
 
   jose@6.2.3:
     resolution: {integrity: sha512-YYVDInQKFJfR/xa3ojUTl8c2KoTwiL1R5Wg9YCydwH0x0B9grbzlg5HC7mMjCtUJjbQ/YnGEZIhI5tCgfTb4Hw==}
-
-  js-mp3@0.1.0:
-    resolution: {integrity: sha512-QBXkUtSoZN87uROL3NwPDeyuQIZghmZJHhZ/JYGSVnRhl2GdkEB+fgZCpfYGzJaOy7+7pYhp5jPC2xXS4IL+LQ==}
 
   js-tokens@4.0.0:
     resolution: {integrity: sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==}
@@ -3962,8 +3956,6 @@ snapshots:
   jiti@2.7.0: {}
 
   jose@6.2.3: {}
-
-  js-mp3@0.1.0: {}
 
   js-tokens@4.0.0: {}
 
