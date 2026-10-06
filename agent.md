@@ -240,8 +240,8 @@ starting at the clip's own start. Fade it in, hold it low under the voice, and
 fade it out by the end:
 
 ```js
-tl.fromTo("#music", { volume: 0 }, { volume: 0.12, duration: 1 }, 0);
-tl.fromTo("#music", { volume: 0.12 }, { volume: 0, duration: 1.5, immediateRender: false }, 30.1);
+tl.fromTo("#music", { volume: 0 }, { volume: 0.08, duration: 1 }, 0);
+tl.fromTo("#music", { volume: 0.08 }, { volume: 0, duration: 1.5, immediateRender: false }, 30.1);
 ```
 
 Never `tl.to` on `volume`: in the render it starts from the clip's
@@ -261,12 +261,14 @@ them on its first `GET /api/assets/{id}`. They are `null` for silence or a
 format the app cannot read (only MP3 at 32, 44.1 or 48 kHz, and WAV, are).
 
 - **Music under a voice:** 12 dB under it. Hold the music at
-  `10^((voice.loudness - 12 - music.loudness) / 20)`, e.g. a voice at -20 and
-  music at -14 LUFS: `10^(-18/20)` = 0.13. Without the numbers, 0.12. Without
-  a voice, hold it at 0.6 to 0.8.
+  `10^((voice.loudness - 12 - music.loudness) / 20)`, e.g. a voiceover at -24
+  and a generated bed at -14 LUFS: `10^(-22/20)` = 0.08. Without the numbers,
+  0.1. Without a voice, hold it at 0.6 to 0.8.
 - **An effect on a moment:** start the clip `peak_at` seconds before it, so
   its hit lands on the moment and not its file start: a click with `peak_at`
-  0.31 for a cursor landing at 4.40 s starts at 4.09. Without the number, 0.3.
+  0.31 for a cursor landing at 4.40 s starts at 4.09. It varies from file to
+  file (generated clicks have hit at 0, 0.10 and 0.31 s), so use each file's
+  own number, never a guess.
 
 Keep effects sparse: one per transition or tap, not on every element.
 
