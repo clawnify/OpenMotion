@@ -221,25 +221,39 @@ Put each in the video as an `<audio class="clip">` on a lane of its own:
 
 ```html
 <audio id="music" class="clip" src="assets/music/3f9c....mp3"
-       data-start="0" data-duration="31.6" data-track-index="9" data-volume="1"></audio>
+       data-start="0" data-duration="31.6" data-track-index="9" data-volume="0"></audio>
 <audio id="whoosh-2" class="clip" src="assets/sfx/a81e....mp3"
        data-start="4.1" data-duration="0.8" data-track-index="10" data-volume="0.6"></audio>
 ```
 
-**Mixing.** Speech is the loudest thing in the video, music sits under it.
-Set the music's level with the timeline and leave its `data-volume` at 1: a
-tween on `volume` replaces `data-volume` rather than scaling it. Fade it in,
-hold it low under the voice, and fade it out by the end:
+**Mixing.** Speech is the loudest thing in the video, music sits under it. A
+sound effect keeps one level, its `data-volume`. The music's level comes from
+the timeline: give it `data-volume="0"` and set every level with `fromTo`,
+starting at the clip's own start. Fade it in, hold it low under the voice, and
+fade it out by the end:
 
 ```js
 tl.fromTo("#music", { volume: 0 }, { volume: 0.25, duration: 1 }, 0);
-tl.to("#music", { volume: 0, duration: 1.5 }, 30.1);
+tl.fromTo("#music", { volume: 0.25 }, { volume: 0, duration: 1.5, immediateRender: false }, 30.1);
 ```
 
-Without a voiceover, hold it higher (0.6 to 0.8). Start a sound effect a
-frame or two before the motion it belongs to (a whoosh as a slide begins, a
-click as the cursor lands), and keep effects sparse: one per transition or tap,
-not on every element.
+Never `tl.to` on `volume`: in the render it starts from the clip's
+`data-volume`, not from where the last tween left it (a fade-out meant to start
+at 0.25 jumps to full volume first). And never leave `data-volume` at 1 under a fade-in:
+the first frame plays at full level, an audible pop. Every `fromTo` after the
+first on the same clip takes `immediateRender: false` in its second object,
+or its start level leaks to before it begins (as above).
+
+0.25 holds the music about 12 dB under a voiceover. Without a voice, hold it
+higher (0.6 to 0.8). Start a sound effect a frame or two before the motion it
+belongs to (a whoosh as a slide begins, a click as the cursor lands), and keep
+effects sparse: one per transition or tap, not on every element.
+
+**Key without the permission:** a 502 saying the API key "is missing the
+permission music_generation" (or `sound_generation`) means the user's
+ElevenLabs key is restricted. Nothing was made or charged. They turn on Music
+or Sound Effects for that key in ElevenLabs (or connect a key that has them),
+then ask again.
 
 ## Product demos of a web app (screen-recording style)
 

@@ -88,3 +88,23 @@ test("a split demo with its clip and the clip's audio lints clean", async () => 
   const lint = await lintComposition(html);
   assert.equal(lint?.errors, 0, JSON.stringify(lint));
 });
+
+test("music faded in from silence lints clean; a gain a volume tween drops still warns", async () => {
+  const mix = (volume: string) => `<div id="root" data-composition-id="m" data-start="0" data-duration="12" data-width="640" data-height="360" style="width:640px;height:360px;position:relative;overflow:hidden">
+  <audio id="music" class="clip" src="assets/music/bed.mp3" data-start="0" data-duration="12" data-track-index="1" data-volume="${volume}"></audio>
+  <audio id="whoosh-1" class="clip" src="assets/sfx/whoosh.mp3" data-start="5" data-duration="0.8" data-track-index="2" data-volume="0.6"></audio>
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3/dist/gsap.min.js"></script>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    tl.fromTo("#music", { volume: 0 }, { volume: 0.25, duration: 1 }, 0);
+    tl.fromTo("#music", { volume: 0.25 }, { volume: 0, duration: 1.5, immediateRender: false }, 10.5);
+    window.__timelines = window.__timelines || {};
+    window.__timelines["m"] = tl;
+  </script>
+</div>`;
+  const silent = await lintComposition(mix("0"));
+  assert.equal(silent?.warnings, 0, JSON.stringify(silent));
+  assert.equal(silent?.errors, 0, JSON.stringify(silent));
+  const boosted = await lintComposition(mix("1.5"));
+  assert.ok(boosted?.findings.some((f) => f.code === "audio_volume_tween_overrides_gain"), JSON.stringify(boosted));
+});

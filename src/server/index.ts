@@ -1084,6 +1084,13 @@ function previewDoc(html: string): string {
       var hold = document.getElementById('om-unfitted'); if (hold) hold.remove();
     })();
     addEventListener('load', function () {
+      // An <audio> clip plays at its data-volume, as in the render (a browser
+      // stops at 1, so a boost plays at full). Set before the timelines
+      // render their start, so a tween on the clip's volume wins.
+      document.querySelectorAll('audio.clip[data-volume]').forEach(function (el) {
+        var gain = parseFloat(el.getAttribute('data-volume'));
+        if (isFinite(gain)) el.volume = Math.max(0, Math.min(1, gain));
+      });
       tls = Object.values(window.__timelines || {});
       tls.forEach(function (tl) { try { tl.pause(0); } catch (e) {} });
       var tlMax = tls.reduce(function (a, tl) { try { return Math.max(a, tl.duration()); } catch (e) { return a; } }, 0);
