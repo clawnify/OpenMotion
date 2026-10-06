@@ -37,7 +37,22 @@ function wavDuration(b: Uint8Array): number | null {
   return null;
 }
 
-function mp3Duration(b: Uint8Array): number | null {
+/** The first real MPEG audio frame in `b`, read from its header. */
+export interface Mp3Frame {
+  /** Byte offset of the frame. */
+  at: number;
+  /** 3 = MPEG-1, 2 = MPEG-2, 0 = MPEG-2.5. */
+  version: number;
+  sampleRate: number;
+  mono: boolean;
+  samplesPerFrame: number;
+  kbps: number;
+  /** Byte offset of a Xing/Info header inside this frame (a VBR or gapless tag, not audio), or null. */
+  infoTag: number | null;
+}
+
+/** The first Layer III frame, after any ID3v2 tag; null when `b` is not MP3. */
+export function findMp3Frame(b: Uint8Array): Mp3Frame | null {
   let start = 0;
   // An ID3v2 tag sits before the first frame: 10-byte header, syncsafe size.
   if (b.length >= 10 && ascii(b, 0, 3) === "ID3") {
@@ -65,20 +80,27 @@ function mp3Duration(b: Uint8Array): number | null {
     const next = at + frameLength;
     if (next + 1 < b.length && (b[next] !== 0xff || (b[next + 1] & 0xe0) !== 0xe0)) continue;
 
-    // A VBR file says how many frames it has in a Xing/Info header inside its
-    // first frame, after the side info; trust that over the bitrate.
+    // A Xing/Info header sits inside the first frame, after the side info.
     const sideInfo = version === 3 ? (mono ? 17 : 32) : mono ? 9 : 17;
     const tag = at + 4 + sideInfo;
-    if (tag + 12 <= b.length && (ascii(b, tag, 4) === "Xing" || ascii(b, tag, 4) === "Info")) {
-      const flags = new DataView(b.buffer, b.byteOffset + tag + 4, 4).getUint32(0);
-      if (flags & 0x1) {
-        const frames = new DataView(b.buffer, b.byteOffset + tag + 8, 4).getUint32(0);
-        if (frames > 0) return (frames * samplesPerFrame) / sampleRate;
-      }
-    }
-
-    // Constant bitrate: the bytes from the first frame on, at that bitrate.
-    return ((b.length - at) * 8) / (kbps * 1000);
+    const infoTag = tag + 12 <= b.length && (ascii(b, tag, 4) === "Xing" || ascii(b, tag, 4) === "Info") ? tag : null;
+    return { at, version, sampleRate, mono, samplesPerFrame, kbps, infoTag };
   }
   return null;
+}
+
+function mp3Duration(b: Uint8Array): number | null {
+  const f = findMp3Frame(b);
+  if (!f) return null;
+  // A VBR file says how many frames it has in its Xing/Info header; trust that
+  // over the bitrate.
+  if (f.infoTag !== null) {
+    const flags = new DataView(b.buffer, b.byteOffset + f.infoTag + 4, 4).getUint32(0);
+    if (flags & 0x1) {
+      const frames = new DataView(b.buffer, b.byteOffset + f.infoTag + 8, 4).getUint32(0);
+      if (frames > 0) return (frames * f.samplesPerFrame) / f.sampleRate;
+    }
+  }
+  // Constant bitrate: the bytes from the first frame on, at that bitrate.
+  return ((b.length - f.at) * 8) / (f.kbps * 1000);
 }
