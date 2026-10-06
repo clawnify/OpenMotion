@@ -19,7 +19,18 @@ import { capturePage, outlinePage, getVideoRender, ClawnifyServicesError, type C
 import { connect, type ConnectionsEnv, type CredentialBinding } from "@clawnify/connections";
 import { caller, user } from "@clawnify/app";
 import { audioDurationSeconds } from "./audio-duration";
-import { ProviderError, deleteFalOutput, falResult, falStatus, isTransient, listVoices, speak, submitAurora } from "./providers";
+import {
+  ProviderError,
+  composeMusic,
+  deleteFalOutput,
+  falResult,
+  falStatus,
+  isTransient,
+  listVoices,
+  soundEffect,
+  speak,
+  submitAurora,
+} from "./providers";
 import {
   DEFAULT_MAX_SECONDS,
   HARD_MAX_SECONDS,
@@ -671,9 +682,10 @@ app.post("/api/renders", async (c) => {
   return c.json(job, job?.status === "failed" ? 201 : 202);
 });
 
-// ── Voices and presenters ────────────────────────────────────────────
-// Speech from a script (ElevenLabs), and a photo animated to speak a voice
-// clip (fal.ai). Both run on the user's own accounts. See presenters.ts.
+// ── Voices, music, sound effects and presenters ──────────────────────
+// Speech from a script, music and sound effects from a prompt (ElevenLabs),
+// and a photo animated to speak a voice clip (fal.ai). All run on the user's
+// own accounts. See presenters.ts.
 
 const PROVIDER_NAMES = { falai: "fal.ai", elevenlabs: "ElevenLabs" } as const;
 const SELF_HOSTED_KEY = { falai: "FAL_KEY", elevenlabs: "ELEVENLABS_API_KEY" } as const;
@@ -749,9 +761,17 @@ app.post("/api/speech", async (c) => {
   } catch (err) {
     return c.json(providerFailure(err), 502);
   }
-  const seconds = audioDurationSeconds(audio);
-  const name = b.name ?? `Voiceover - ${b.script.trim().split(/\s+/).slice(0, 6).join(" ").replace(/[.,;:!?]+$/, "")}`;
-  const assetKey = `voice/${lower16()}.mp3`;
+  return c.json(await saveMp3(audio, "voice", b.name ?? `Voiceover - ${firstWords(b.script)}`), 201);
+});
+
+/** "Upbeat lo-fi beat, warm keys." -> "Upbeat lo-fi beat, warm keys" (a library name). */
+function firstWords(text: string): string {
+  return text.trim().split(/\s+/).slice(0, 6).join(" ").replace(/[.,;:!?]+$/, "");
+}
+
+/** A generated MP3 into the media library, with its length read from the file. */
+async function saveMp3(audio: Uint8Array, folder: string, name: string): Promise<Asset | undefined> {
+  const assetKey = `${folder}/${lower16()}.mp3`;
   await putUpload(assetKey, audio, "audio/mpeg");
   const id = lower16();
   await run("INSERT INTO assets (id, key, name, content_type, size, duration) VALUES (?, ?, ?, 'audio/mpeg', ?, ?)", [
@@ -759,9 +779,73 @@ app.post("/api/speech", async (c) => {
     assetKey,
     `${name}.mp3`,
     audio.byteLength,
-    seconds,
+    audioDurationSeconds(audio),
   ]);
-  return c.json(await get<Asset>("SELECT * FROM assets WHERE id = ?", [id]), 201);
+  return get<Asset>("SELECT * FROM assets WHERE id = ?", [id]);
+}
+
+const musicBody = z
+  .object({
+    /** Genre, mood, instruments, tempo: "warm lo-fi beat, soft keys, 90 bpm". */
+    prompt: z.string().min(1).max(4000),
+    /** Length; set it to the video's. ElevenLabs makes 3 to 600 seconds. */
+    seconds: z.number().min(3).max(600),
+    /** No vocals (the default): a bed under a voiceover must not sing over it. */
+    instrumental: z.boolean().default(true),
+    /** ElevenLabs model; theirs (music_v1) when omitted. */
+    music_model: z.string().min(1).max(100).optional(),
+    name: z.string().min(1).max(200).optional(),
+  })
+  .strict();
+
+// Prompt -> a piece of music of a set length -> an MP3 in the media library.
+// The bed under a video. Answers when the track is done (tens of seconds).
+app.post("/api/music", async (c) => {
+  const parsed = musicBody.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: "Invalid music request", problems: problems(parsed.error) }, 422);
+  const b = parsed.data;
+  const key = await providerKey(c.env, "elevenlabs");
+  if (!key) return c.json(notConnected(c.env, "elevenlabs"), 409);
+
+  let audio: Uint8Array;
+  try {
+    audio = await composeMusic(key, { prompt: b.prompt, seconds: b.seconds, instrumental: b.instrumental, modelId: b.music_model });
+  } catch (err) {
+    return c.json(providerFailure(err), 502);
+  }
+  return c.json(await saveMp3(audio, "music", b.name ?? `Music - ${firstWords(b.prompt)}`), 201);
+});
+
+const soundEffectBody = z
+  .object({
+    /** What it sounds like: "soft whoosh, left to right", "mouse click". */
+    prompt: z.string().min(1).max(1000),
+    /** 0.5 to 30 seconds; ElevenLabs picks a length when omitted. */
+    seconds: z.number().min(0.5).max(30).optional(),
+    /** Ends where it starts, to repeat seamlessly. */
+    loop: z.boolean().optional(),
+    /** 0 to 1: higher follows the prompt more literally (theirs is 0.3). */
+    prompt_influence: z.number().min(0).max(1).optional(),
+    name: z.string().min(1).max(200).optional(),
+  })
+  .strict();
+
+// Prompt -> a sound effect -> an MP3 in the media library: a whoosh on a
+// transition, a click on a tap, a riser before a reveal.
+app.post("/api/sound-effects", async (c) => {
+  const parsed = soundEffectBody.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: "Invalid sound effect request", problems: problems(parsed.error) }, 422);
+  const b = parsed.data;
+  const key = await providerKey(c.env, "elevenlabs");
+  if (!key) return c.json(notConnected(c.env, "elevenlabs"), 409);
+
+  let audio: Uint8Array;
+  try {
+    audio = await soundEffect(key, { prompt: b.prompt, seconds: b.seconds, loop: b.loop, promptInfluence: b.prompt_influence });
+  } catch (err) {
+    return c.json(providerFailure(err), 502);
+  }
+  return c.json(await saveMp3(audio, "sfx", b.name ?? `Sound - ${firstWords(b.prompt)}`), 201);
 });
 
 const presenterBody = z
