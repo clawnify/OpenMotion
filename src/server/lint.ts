@@ -56,7 +56,7 @@ const NOT_HERE = new Set(["timeline_track_too_dense", "nested_structure_needs_su
 function intendedSilentBase(html: string, f: HyperframeLintFinding): boolean {
   if (f.code !== "audio_volume_tween_overrides_gain" || !f.elementId) return false;
   const id = f.elementId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const tag = html.match(new RegExp(`<(?:audio|video)\\b[^>]*\\bid="${id}"[^>]*>`))?.[0];
+  const tag = html.match(new RegExp(`<(?:audio|video)\\b[^>]*\\sid="${id}"[^>]*>`))?.[0];
   return !!tag && /\bdata-volume="0(?:\.0*)?"/.test(tag);
 }
 

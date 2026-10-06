@@ -206,7 +206,7 @@ make it from the user's ElevenLabs account, the same connection as their voices
 
 - **Music bed:** `POST /api/music { prompt, seconds }` (optional
   `instrumental`, default `true`; `music_model`; `name`) answers with an MP3
-  asset when the track is done, tens of seconds for a short one. `seconds` is
+  asset when the track is done. `seconds` is
   the video's length (3 to 600): a clip that runs past the end makes the video
   longer. Describe genre, mood, instruments and tempo ("warm lo-fi beat, soft
   keys, 90 bpm, no drums in the first 4 seconds"). Keep it instrumental under a
@@ -248,6 +248,10 @@ or its start level leaks to before it begins (as above).
 higher (0.6 to 0.8). Start a sound effect a frame or two before the motion it
 belongs to (a whoosh as a slide begins, a click as the cursor lands), and keep
 effects sparse: one per transition or tap, not on every element.
+
+**If the call times out** before it answers, the track may still arrive:
+each call is billed, so look at `GET /api/assets` (newest first) for it
+before asking again.
 
 **Key without the permission:** a 502 saying the API key "is missing the
 permission music_generation" (or `sound_generation`) means the user's

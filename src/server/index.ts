@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { initDB, query, get, run } from "./db";
 import {
   initUploads,
@@ -784,6 +784,22 @@ async function saveMp3(audio: Uint8Array, folder: string, name: string): Promise
   return get<Asset>("SELECT * FROM assets WHERE id = ?", [id]);
 }
 
+/**
+ * Make a generated MP3 and file it. The caller may stop waiting before the
+ * provider is done (an agent's tool call has its own time limit); the work
+ * then carries on for up to 30 s more (waitUntil), so a track already being
+ * paid for still lands in the library instead of being cut off.
+ */
+async function generateMp3(c: Context, make: () => Promise<Uint8Array>, folder: string, name: string) {
+  const work = make().then((audio) => saveMp3(audio, folder, name));
+  try {
+    c.executionCtx.waitUntil(work.catch(() => undefined));
+  } catch {
+    // No ExecutionContext outside the Workers runtime: nothing to extend.
+  }
+  return work;
+}
+
 const musicBody = z
   .object({
     /** Genre, mood, instruments, tempo: "warm lo-fi beat, soft keys, 90 bpm". */
@@ -799,7 +815,7 @@ const musicBody = z
   .strict();
 
 // Prompt -> a piece of music of a set length -> an MP3 in the media library.
-// The bed under a video. Answers when the track is done (tens of seconds).
+// The bed under a video. Answers when the track is done.
 app.post("/api/music", async (c) => {
   const parsed = musicBody.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: "Invalid music request", problems: problems(parsed.error) }, 422);
@@ -807,13 +823,12 @@ app.post("/api/music", async (c) => {
   const key = await providerKey(c.env, "elevenlabs");
   if (!key) return c.json(notConnected(c.env, "elevenlabs"), 409);
 
-  let audio: Uint8Array;
+  const make = () => composeMusic(key, { prompt: b.prompt, seconds: b.seconds, instrumental: b.instrumental, modelId: b.music_model });
   try {
-    audio = await composeMusic(key, { prompt: b.prompt, seconds: b.seconds, instrumental: b.instrumental, modelId: b.music_model });
+    return c.json(await generateMp3(c, make, "music", b.name ?? `Music - ${firstWords(b.prompt)}`), 201);
   } catch (err) {
     return c.json(providerFailure(err), 502);
   }
-  return c.json(await saveMp3(audio, "music", b.name ?? `Music - ${firstWords(b.prompt)}`), 201);
 });
 
 const soundEffectBody = z
@@ -839,13 +854,12 @@ app.post("/api/sound-effects", async (c) => {
   const key = await providerKey(c.env, "elevenlabs");
   if (!key) return c.json(notConnected(c.env, "elevenlabs"), 409);
 
-  let audio: Uint8Array;
+  const make = () => soundEffect(key, { prompt: b.prompt, seconds: b.seconds, loop: b.loop, promptInfluence: b.prompt_influence });
   try {
-    audio = await soundEffect(key, { prompt: b.prompt, seconds: b.seconds, loop: b.loop, promptInfluence: b.prompt_influence });
+    return c.json(await generateMp3(c, make, "sfx", b.name ?? `Sound - ${firstWords(b.prompt)}`), 201);
   } catch (err) {
     return c.json(providerFailure(err), 502);
   }
-  return c.json(await saveMp3(audio, "sfx", b.name ?? `Sound - ${firstWords(b.prompt)}`), 201);
 });
 
 const presenterBody = z
