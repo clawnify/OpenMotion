@@ -206,16 +206,21 @@ make it from the user's ElevenLabs account, the same connection as their voices
 
 - **Music bed:** `POST /api/music { prompt, seconds }` (optional
   `instrumental`, default `true`; `music_model`; `name`) answers with an MP3
-  asset when the track is done. `seconds` is
-  the video's length (3 to 600): a clip that runs past the end makes the video
-  longer. Describe genre, mood, instruments and tempo ("warm lo-fi beat, soft
-  keys, 90 bpm, no drums in the first 4 seconds"). Keep it instrumental under a
+  asset when the track is done, about 10 to 15 seconds for a 30 to 60 second
+  track. `seconds` is the video's length (3 to 600): a clip that runs past the
+  end makes the video longer. Describe genre, mood, instruments and tempo
+  ("warm lo-fi beat, soft keys, 90 bpm"); a named tempo comes out close to it
+  (90 bpm measured 89.6), so cuts can fall on its beats, every 60/bpm seconds
+  (0.667 s at 90 bpm). The track ends itself, fading out over its last 2 to 6
+  seconds, and may start at full level. Keep it instrumental under a
   voiceover; sung lyrics fight the voice.
 - **Sound effect:** `POST /api/sound-effects { prompt }` (optional `seconds`
   0.5 to 30, `loop` for an ambience that repeats seamlessly,
   `prompt_influence` 0 to 1, `name`). One file per kind of sound ("soft
   whoosh", "mouse click", "riser into a reveal"); reuse it wherever that sound
-  recurs, each use its own `<audio>` with its own `id`.
+  recurs, each use its own `<audio>` with its own `id`. Always send `seconds`
+  near the sound's own length (a click 0.5, a whoosh 0.8): without it a click
+  came back 2 s long with its hit at 1.87 s.
 
 Put each in the video as an `<audio class="clip">` on a lane of its own:
 
@@ -233,8 +238,8 @@ starting at the clip's own start. Fade it in, hold it low under the voice, and
 fade it out by the end:
 
 ```js
-tl.fromTo("#music", { volume: 0 }, { volume: 0.25, duration: 1 }, 0);
-tl.fromTo("#music", { volume: 0.25 }, { volume: 0, duration: 1.5, immediateRender: false }, 30.1);
+tl.fromTo("#music", { volume: 0 }, { volume: 0.12, duration: 1 }, 0);
+tl.fromTo("#music", { volume: 0.12 }, { volume: 0, duration: 1.5, immediateRender: false }, 30.1);
 ```
 
 Never `tl.to` on `volume`: in the render it starts from the clip's
@@ -244,10 +249,14 @@ the first frame plays at full level, an audible pop. Every `fromTo` after the
 first on the same clip takes `immediateRender: false` in its second object,
 or its start level leaks to before it begins (as above).
 
-0.25 holds the music about 12 dB under a voiceover. Without a voice, hold it
-higher (0.6 to 0.8). Start a sound effect a frame or two before the motion it
-belongs to (a whoosh as a slide begins, a click as the cursor lands), and keep
-effects sparse: one per transition or tap, not on every element.
+0.12 holds the music about 12 dB under a voiceover: generated beds come out
+near −16 to −18 dB and a voice near −23 dB while it speaks, so 0.25 would leave
+the music only 5 dB under it. Without a voice, hold it at 0.6 to 0.8.
+
+A sound effect is loudest about 0.2 to 0.35 s into its file, not at its start,
+so start the clip that much before the moment it belongs to: a click for a
+cursor landing at 4.40 s starts at 4.10. Keep effects sparse: one per
+transition or tap, not on every element.
 
 **If the call times out** before it answers, the track may still arrive:
 each call is billed, so look at `GET /api/assets` (newest first) for it
