@@ -20,6 +20,7 @@ Agents are already good at writing motion graphics as code. Where it gets hard i
 - **Export when you need a file**: the preview is the video, so nothing renders until you export. Export makes a real MP4 in the background, downloads it when it is ready and keeps it in your media library. A long video or a closed tab loses nothing: reopen the video and the export picks up where it was.
 - **Voiceovers and presenters**: turn a script into speech in one of your ElevenLabs voices, and a photo plus a voice clip into a video of that person speaking (fal.ai). Both land in your media library, run on your own accounts, and need the person's consent to animate them.
 - **Music and sound effects**: a music bed made to the video's length and sound effects for its transitions and clicks, from a prompt, on your own ElevenLabs account. Every sound is measured (loudness in LUFS, and where it hits hardest), so an agent sets levels and timing from numbers.
+- **Captions timed to the words**: every voiceover knows when each word is spoken, and a recording or video you upload can be transcribed, so captions land on the voice instead of being guessed.
 - **Agent-ready**: a REST API (`/api/compositions`, `/api/assets`, `/api/renders`, `/api/speech`, `/api/music`, `/api/sound-effects`, `/api/presenters`) and an `agent.md`, so an agent can author and render videos on its own.
 
 ## How a composition works

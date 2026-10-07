@@ -199,6 +199,71 @@ example a caption "AI-generated presenter" in the video or in the post.
 connects fal.ai or ElevenLabs under Integrations; self-hosted, the app reads
 `FAL_KEY` and `ELEVENLABS_API_KEY`.
 
+## Captions from the voice
+
+Most people watch with the sound off, so a video with a voice gets captions,
+timed to the words. Never time them by guessing or by dividing the script
+evenly: every voice can carry the time of each word it speaks.
+
+- **Speech made here has them.** The asset from `POST /api/speech` comes back
+  with `words: [{ text, start, end }]` (seconds into the file), and a
+  presenter video made from that voice carries the same words.
+- **A recording or video they uploaded** gets them with
+  `POST /api/assets/{id}/transcribe` (optional `{ language: "en" }`; it is
+  detected when left out). It uses their ElevenLabs account, like speech, and
+  takes a few seconds for a minute of audio. Files over 50 MB are refused. An
+  empty `words` list means nobody speaks in it.
+- `GET /api/assets` shows `word_count` per asset (`null`: no timings yet);
+  `GET /api/assets/{id}` has the words.
+
+Then ask for the lines, timed for the video:
+`GET /api/assets/{id}/captions?offset=<the voice clip's data-start>&max_words=4`.
+It answers `lines: [{ text, start, end, words }]`, already moved to video time,
+broken at sentence ends, at pauses of 150 ms or more, and at `max_words`
+(2 to 3 for a punchy short, 3 to 5 conversational, 4 to 6 calm). Paste the
+lines into the composition as they come:
+
+```html
+<div id="captions" class="clip" data-start="0" data-duration="31.6" data-track-index="8"
+     style="position:absolute;left:60px;right:60px;bottom:520px;text-align:center;
+            color:#fff;font:800 64px/1.15 sans-serif;text-shadow:0 2px 12px rgba(0,0,0,.6)"></div>
+<script>
+  // From GET /api/assets/{voice}/captions?offset=0, unchanged.
+  var LINES = [{ "text": "Plan the week", "start": 0.21, "end": 0.98 }, { "text": "in one minute.", "start": 1.02, "end": 1.9 }];
+  var box = document.getElementById("captions");
+  LINES.forEach(function (line, i) {
+    var el = document.createElement("div");
+    el.textContent = line.text;
+    el.style.cssText = "position:absolute;left:0;right:0;bottom:0;opacity:0";
+    box.appendChild(el);
+    var next = LINES[i + 1];
+    // Hold a line through a short gap so captions don't blink between lines.
+    var off = next && next.start - line.end < 0.5 ? next.start : line.end + 0.2;
+    tl.fromTo(el, { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.18, ease: "power2.out" }, line.start);
+    tl.set(el, { opacity: 0 }, off);
+  });
+</script>
+```
+
+The script goes after `tl` is made and before it is registered. Rules that keep
+captions readable and right in the render:
+
+- **One line on screen at a time**, and every line ends with a `tl.set` that
+  hides it: a fade alone leaves it visible if the playhead lands mid-fade.
+- **Place them in the safe area**: in a vertical video, the lower middle
+  (about 500 to 700 px from the bottom), clear of the platform's buttons and
+  caption bar; in a landscape one, 80 to 120 px from the bottom. Never over a
+  face: move them above a presenter's head or to the other half in a split.
+- **Size for a phone:** 56 to 80 px in a 1080-wide video, heavy weight, with a
+  shadow or a backing so they read on any frame. Keep each line inside the
+  frame (left and right insets, as above); shorten `max_words` rather than
+  shrinking the type.
+- **Style to the tone.** A launch can pop each line in (`back.out`); a calm
+  explainer fades. For a word-by-word highlight, use each line's `words` the
+  same way, one span per word, each lit at its own `start`.
+- **If the voice clip moves**, ask for the lines again with its new
+  `data-start`: the timings follow the offset you pass, not the clip.
+
 ## Music and sound effects (generated)
 
 Don't synthesise sound in code (oscillators, Web Audio beeps): it renders as
@@ -452,10 +517,12 @@ captions only to a demo you will not rebuild.
 | POST | `/api/compositions/screen-demo` | Build a product demo from stills you already have |
 | PUT  | `/api/compositions/{id}` | Update any of `name/description/html/fps` → the row with `lint` |
 | DELETE | `/api/compositions/{id}` | Delete |
-| GET  | `/api/assets` | List the media library (a sound with its `loudness` and `peak_at`) |
-| GET  | `/api/assets/{id}` | One asset; measures an older sound on its first read |
+| GET  | `/api/assets` | List the media library (a sound with its `loudness` and `peak_at`, a voice with its `word_count`) |
+| GET  | `/api/assets/{id}` | One asset, with its `words`; measures an older sound on its first read |
+| POST | `/api/assets/{id}/transcribe` | The words spoken in a sound or video, with their times `{ language? }` |
+| GET  | `/api/assets/{id}/captions` | Its words as caption lines: `?offset=` (the clip's `data-start`), `?max_words=` |
 | GET  | `/api/voices` | The user's ElevenLabs voices: `?search=`, `?category=`, `?page_token=` |
-| POST | `/api/speech` | Script to speech `{ voice_id, script }` → an MP3 asset |
+| POST | `/api/speech` | Script to speech `{ voice_id, script }` → an MP3 asset with its `words` |
 | POST | `/api/music` | A music bed from a prompt `{ prompt, seconds }` → an MP3 asset |
 | POST | `/api/sound-effects` | A sound effect from a prompt `{ prompt }` → an MP3 asset |
 | POST | `/api/presenters` | Photo + voice clip to a talking-head video `{ image_asset_id, audio_asset_id, consent: true }` → the job at once |

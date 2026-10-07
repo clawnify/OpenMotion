@@ -12,6 +12,7 @@ import {
 import { startRender } from "./render";
 import { settle, type RenderJob, type SettleIO } from "./exports";
 import { compositionLength, withLength } from "../shared/length";
+import { type Word, groupWords, parseWords } from "../shared/words";
 import { lintComposition } from "./lint";
 import { z } from "zod";
 import { type ScreenDemoOptions, screenDemoHtml, screenDemoProblems, defaultSeconds, demoSpecOf, fitSeconds, minimumSeconds, replaceDemoSteps, withDemoSpec } from "../shared/screen-demo";
@@ -31,6 +32,7 @@ import {
   soundEffect,
   speak,
   submitAurora,
+  transcribe,
 } from "./providers";
 import {
   DEFAULT_MAX_SECONDS,
@@ -464,11 +466,20 @@ interface Asset {
   content_type: string;
   size: number;
   created_at: string;
+  /** JSON word timings (shared/words.ts); null when the asset has none. */
+  words?: string | null;
 }
 
+/** One asset as the API shows it: its words as a list. */
+function assetOut<T extends Asset>(row: T) {
+  return { ...row, words: parseWords(row.words) };
+}
+
+// The library. Word timings can run to thousands of words, so the list says
+// how many there are and GET /api/assets/:id has them.
 app.get("/api/assets", async (c) => {
   const rows = await query<Asset>("SELECT * FROM assets ORDER BY created_at DESC");
-  return c.json(rows);
+  return c.json(rows.map(({ words, ...row }) => ({ ...row, word_count: parseWords(words)?.length ?? null })));
 });
 
 app.post("/api/assets", async (c) => {
@@ -510,7 +521,7 @@ app.post("/api/assets", async (c) => {
 app.get("/api/assets/:id", async (c) => {
   const row = await get<Asset & { measured_at: string | null }>("SELECT * FROM assets WHERE id = ?", [c.req.param("id")]);
   if (!row) return c.json({ error: "Not found" }, 404);
-  if (row.measured_at || !row.content_type.startsWith("audio/")) return c.json(row);
+  if (row.measured_at || !row.content_type.startsWith("audio/")) return c.json(assetOut(row));
   const bytes = await getUploadBytes(row.key);
   const measure = bytes ? await measureAudio(new Uint8Array(bytes)) : null;
   await run("UPDATE assets SET loudness = ?, peak_at = ?, measured_at = datetime('now') WHERE id = ?", [
@@ -518,7 +529,7 @@ app.get("/api/assets/:id", async (c) => {
     measure?.peak_at ?? null,
     row.id,
   ]);
-  return c.json(await get<Asset>("SELECT * FROM assets WHERE id = ?", [row.id]));
+  return c.json(assetOut((await get<Asset>("SELECT * FROM assets WHERE id = ?", [row.id]))!));
 });
 
 // Backfill a probed duration onto a legacy asset (self-healing library).
@@ -532,7 +543,7 @@ app.patch("/api/assets/:id", async (c) => {
   }
   const row = await get<Asset>("SELECT * FROM assets WHERE id = ?", [c.req.param("id")]);
   if (!row) return c.json({ error: "Not found" }, 404);
-  return c.json(row);
+  return c.json(assetOut(row));
 });
 
 app.delete("/api/assets/:id", async (c) => {
@@ -776,13 +787,14 @@ app.post("/api/speech", async (c) => {
   const key = await providerKey(c.env, "elevenlabs");
   if (!key) return c.json(notConnected(c.env, "elevenlabs"), 409);
 
-  let audio: Uint8Array;
+  let speech: Awaited<ReturnType<typeof speak>>;
   try {
-    audio = await speak(key, { voiceId: b.voice_id, text: b.script, modelId: b.voice_model, voiceSettings: b.voice_settings });
+    speech = await speak(key, { voiceId: b.voice_id, text: b.script, modelId: b.voice_model, voiceSettings: b.voice_settings });
   } catch (err) {
     return c.json(providerFailure(err), 502);
   }
-  return c.json(await saveMp3(audio, "voice", b.name ?? `Voiceover - ${firstWords(b.script)}`), 201);
+  const asset = await saveMp3(speech.audio, "voice", b.name ?? `Voiceover - ${firstWords(b.script)}`, speech.words);
+  return c.json(asset && assetOut(asset), 201);
 });
 
 /** "Upbeat lo-fi beat, warm keys." -> "Upbeat lo-fi beat, warm keys" (a library name). */
@@ -791,15 +803,24 @@ function firstWords(text: string): string {
 }
 
 /** A generated MP3 into the media library, with its length read from the file. */
-async function saveMp3(audio: Uint8Array, folder: string, name: string): Promise<Asset | undefined> {
+async function saveMp3(audio: Uint8Array, folder: string, name: string, words?: Word[]): Promise<Asset | undefined> {
   const assetKey = `${folder}/${lower16()}.mp3`;
   await putUpload(assetKey, audio, "audio/mpeg");
   const id = lower16();
   const measure = await measureAudio(audio);
   await run(
-    `INSERT INTO assets (id, key, name, content_type, size, duration, loudness, peak_at, measured_at)
-     VALUES (?, ?, ?, 'audio/mpeg', ?, ?, ?, ?, datetime('now'))`,
-    [id, assetKey, `${name}.mp3`, audio.byteLength, audioDurationSeconds(audio), measure?.loudness ?? null, measure?.peak_at ?? null],
+    `INSERT INTO assets (id, key, name, content_type, size, duration, loudness, peak_at, measured_at, words)
+     VALUES (?, ?, ?, 'audio/mpeg', ?, ?, ?, ?, datetime('now'), ?)`,
+    [
+      id,
+      assetKey,
+      `${name}.mp3`,
+      audio.byteLength,
+      audioDurationSeconds(audio),
+      measure?.loudness ?? null,
+      measure?.peak_at ?? null,
+      words?.length ? JSON.stringify(words) : null,
+    ],
   );
   return get<Asset>("SELECT * FROM assets WHERE id = ?", [id]);
 }
@@ -811,7 +832,11 @@ async function saveMp3(audio: Uint8Array, folder: string, name: string): Promise
  * paid for still lands in the library instead of being cut off.
  */
 async function generateMp3(c: Context, make: () => Promise<Uint8Array>, folder: string, name: string) {
-  const work = make().then((audio) => saveMp3(audio, folder, name));
+  return keepRunning(c, make().then((audio) => saveMp3(audio, folder, name)));
+}
+
+/** Let paid provider work finish (up to 30 s more) when the caller stops waiting. */
+function keepRunning<T>(c: Context, work: Promise<T>): Promise<T> {
   try {
     c.executionCtx.waitUntil(work.catch(() => undefined));
   } catch {
@@ -819,6 +844,70 @@ async function generateMp3(c: Context, make: () => Promise<Uint8Array>, folder: 
   }
   return work;
 }
+
+/**
+ * The biggest file sent for transcription. The Worker holds it in memory to
+ * send it (128 MB in all): 50 MB is most of an hour of voice MP3, or a few
+ * minutes of 1080p video.
+ */
+const MAX_TRANSCRIBE_BYTES = 50 * 1024 * 1024;
+
+const transcribeBody = z
+  .object({
+    /** ISO 639-1 or 639-3 ("en", "ita"). Detected when omitted. */
+    language: z.string().min(2).max(3).optional(),
+  })
+  .strict();
+
+// The words spoken in a recording or video, with their times (ElevenLabs
+// speech to text), for captions. Speech made by POST /api/speech, and a
+// presenter made from it, have them already. Replaces any the asset had; an
+// empty list means nobody speaks in it.
+app.post("/api/assets/:id/transcribe", async (c) => {
+  const parsed = transcribeBody.safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) return c.json({ error: "Invalid transcribe request", problems: problems(parsed.error) }, 422);
+  const row = await get<Asset>("SELECT * FROM assets WHERE id = ?", [c.req.param("id")]);
+  if (!row) return c.json({ error: "Not found" }, 404);
+  if (!/^(audio|video)\//.test(row.content_type)) {
+    return c.json({ error: `Only sound and video can be transcribed, not ${row.content_type}.` }, 422);
+  }
+  if (row.size > MAX_TRANSCRIBE_BYTES) {
+    return c.json({ error: "The file is over 50 MB, too big to transcribe from the app. Upload the voice on its own as an MP3." }, 413);
+  }
+  const key = await providerKey(c.env, "elevenlabs");
+  if (!key) return c.json(notConnected(c.env, "elevenlabs"), 409);
+  const bytes = await getUploadBytes(row.key);
+  if (!bytes) return c.json({ error: "The file is missing from storage." }, 404);
+
+  let language: string | null;
+  try {
+    ({ language } = await keepRunning(
+      c,
+      transcribe(key, new Blob([bytes], { type: row.content_type }), parsed.data.language).then(async (t) => {
+        await run("UPDATE assets SET words = ? WHERE id = ?", [JSON.stringify(t.words), row.id]);
+        return t;
+      }),
+    ));
+  } catch (err) {
+    return c.json(providerFailure(err), 502);
+  }
+  return c.json({ ...assetOut((await get<Asset>("SELECT * FROM assets WHERE id = ?", [row.id]))!), language });
+});
+
+// A voice's words as caption lines, timed for the video. ?max_words per line
+// (1 to 12, default 4); ?offset = where the clip plays in the video, its
+// data-start, added to every time.
+app.get("/api/assets/:id/captions", async (c) => {
+  const row = await get<Asset>("SELECT * FROM assets WHERE id = ?", [c.req.param("id")]);
+  if (!row) return c.json({ error: "Not found" }, 404);
+  const words = parseWords(row.words);
+  if (!words) {
+    return c.json({ error: "This asset has no word timings yet: POST /api/assets/:id/transcribe first.", asset_id: row.id }, 409);
+  }
+  const maxWords = Math.min(Math.max(Math.round(Number(c.req.query("max_words")) || 4), 1), 12);
+  const offset = Number(c.req.query("offset")) || 0;
+  return c.json({ asset_id: row.id, max_words: maxWords, offset, lines: groupWords(words, maxWords, offset) });
+});
 
 const musicBody = z
   .object({
@@ -992,8 +1081,11 @@ function presenterIO(env: Bindings, falKey: string): PresenterIO {
     discard: (job) => deleteFalOutput(falKey, job.fal_request_id),
     async asset(key, size, job) {
       await run(
-        "INSERT OR IGNORE INTO assets (id, key, name, content_type, size, duration) VALUES (?, ?, ?, 'video/mp4', ?, ?)",
-        [lower16(), key, presenterAssetName(job.name), size, job.audio_seconds],
+        // The presenter speaks the voice clip from its first frame, so the
+        // clip's word timings are the video's.
+        `INSERT OR IGNORE INTO assets (id, key, name, content_type, size, duration, words)
+         VALUES (?, ?, ?, 'video/mp4', ?, ?, (SELECT words FROM assets WHERE id = ?))`,
+        [lower16(), key, presenterAssetName(job.name), size, job.audio_seconds, job.audio_asset_id],
       );
       const row = await get<{ id: string }>("SELECT id FROM assets WHERE key = ?", [key]);
       return row!.id;
