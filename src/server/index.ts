@@ -6,6 +6,7 @@ import {
   getUpload,
   getUploadRange,
   getUploadBytes,
+  getUploadBlob,
   deleteUpload,
   makeKey,
 } from "./uploads";
@@ -876,14 +877,14 @@ app.post("/api/assets/:id/transcribe", async (c) => {
   }
   const key = await providerKey(c.env, "elevenlabs");
   if (!key) return c.json(notConnected(c.env, "elevenlabs"), 409);
-  const bytes = await getUploadBytes(row.key);
-  if (!bytes) return c.json({ error: "The file is missing from storage." }, 404);
+  const file = await getUploadBlob(row.key);
+  if (!file) return c.json({ error: "The file is missing from storage." }, 404);
 
   let language: string | null;
   try {
     ({ language } = await keepRunning(
       c,
-      transcribe(key, new Blob([bytes], { type: row.content_type }), parsed.data.language).then(async (t) => {
+      transcribe(key, file, parsed.data.language).then(async (t) => {
         await run("UPDATE assets SET words = ? WHERE id = ?", [JSON.stringify(t.words), row.id]);
         return t;
       }),
