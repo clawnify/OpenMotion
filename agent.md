@@ -212,7 +212,10 @@ evenly: every voice can carry the time of each word it speaks.
   `POST /api/assets/{id}/transcribe` (optional `{ language: "en" }`; it is
   detected when left out). It uses their ElevenLabs account, like speech, and
   takes a few seconds for a minute of audio. Files over 50 MB are refused. An
-  empty `words` list means nobody speaks in it.
+  empty `words` list means nobody speaks in it. A 502 saying the key "is
+  missing the permission speech_to_text" means their ElevenLabs key is
+  restricted: nothing was charged; they turn on Speech to Text for that key
+  in ElevenLabs, then ask again.
 - `GET /api/assets` shows `word_count` per asset (`null`: no timings yet);
   `GET /api/assets/{id}` has the words.
 
