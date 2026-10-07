@@ -221,7 +221,9 @@ evenly: every voice can carry the time of each word it speaks.
 
 Then ask for the lines, timed for the video:
 `GET /api/assets/{id}/captions?offset=<the voice clip's data-start>&max_words=4`.
-It answers `lines: [{ text, start, end, words }]`, already moved to video time.
+It answers `lines: [{ text, start, end, until, words }]`, already moved to video
+time. `until` is when the line leaves: the next line's start after a short gap
+(so captions don't blink), else 0.2 s after its last word.
 A line never runs across a sentence end, a comma or a pause of 150 ms or more,
 and a longer phrase is spread evenly over lines of at most `max_words`
 (2 to 3 for a punchy short, 3 to 5 conversational, 4 to 6 calm). Paste the
@@ -233,18 +235,16 @@ lines into the composition as they come:
             color:#fff;font:800 64px/1.15 sans-serif;text-shadow:0 2px 12px rgba(0,0,0,.6)"></div>
 <script>
   // From GET /api/assets/{voice}/captions?offset=0, unchanged.
-  var LINES = [{ "text": "Plan the week", "start": 0.21, "end": 0.98 }, { "text": "in one minute.", "start": 1.02, "end": 1.9 }];
+  var LINES = [{ "text": "Plan the week", "start": 0.21, "end": 0.98, "until": 1.02 },
+               { "text": "in one minute.", "start": 1.02, "end": 1.9, "until": 2.1 }];
   var box = document.getElementById("captions");
   LINES.forEach(function (line, i) {
     var el = document.createElement("div");
     el.textContent = line.text;
     el.style.cssText = "position:absolute;left:0;right:0;bottom:0;opacity:0";
     box.appendChild(el);
-    var next = LINES[i + 1];
-    // Hold a line through a short gap so captions don't blink between lines.
-    var off = next && next.start - line.end < 0.5 ? next.start : line.end + 0.2;
     tl.fromTo(el, { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.18, ease: "power2.out" }, line.start);
-    tl.set(el, { opacity: 0 }, off);
+    tl.set(el, { opacity: 0 }, line.until);
   });
 </script>
 ```
@@ -253,7 +253,8 @@ The script goes after `tl` is made and before it is registered. Rules that keep
 captions readable and right in the render:
 
 - **One line on screen at a time**, and every line ends with a `tl.set` that
-  hides it: a fade alone leaves it visible if the playhead lands mid-fade.
+  hides it at its `until`: a fade alone leaves it visible if the playhead
+  lands mid-fade.
 - **Place them in the safe area**: in a vertical video, the lower middle
   (about 500 to 700 px from the bottom), clear of the platform's buttons and
   caption bar; in a landscape one, 80 to 120 px from the bottom. Never over a

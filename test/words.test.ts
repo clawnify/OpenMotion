@@ -25,6 +25,19 @@ test("runs of spaces and line breaks separate words and are never words", () => 
   assert.deepEqual(words.map((w) => w.text), ["One", "two"]);
 });
 
+test("a script written without spaces is split into its words, and joined back without spaces", () => {
+  const words = wordsFromAlignment(alignment("今日は良い天気です。散歩に行きましょう。", 0.1));
+  assert.deepEqual(words.slice(0, 5).map((w) => w.text), ["今日", "は", "良い", "天気", "です。"]);
+  assert.deepEqual(words[3], { text: "天気", start: 0.5, end: 0.7 });
+  assert.deepEqual(groupWords(words, 4).map((g) => g.text), ["今日は良い", "天気です。", "散歩に行き", "ましょう。"]);
+});
+
+test("a spaced script mixed with an unspaced one keeps its spaces", () => {
+  const words = wordsFromAlignment(alignment("Claude は 速い", 0.1));
+  assert.deepEqual(words.map((w) => w.text), ["Claude", "は", "速い"]);
+  assert.equal(groupWords(words, 4)[0].text, "Claude は速い");
+});
+
 test("no alignment, no words", () => {
   assert.deepEqual(wordsFromAlignment(null), []);
 });
@@ -83,11 +96,24 @@ test("a line spans its words, moved by where the clip starts", () => {
     text: "Go now",
     start: 3,
     end: 3.6,
+    until: 3.8,
     words: [
       { text: "Go", start: 3, end: 3.3 },
       { text: "now", start: 3.35, end: 3.6 },
     ],
   });
+});
+
+test("a line holds until the next after a short gap, and leaves soon after a long one", () => {
+  const lines = groupWords(
+    [
+      { text: "One.", start: 0, end: 0.5 },
+      { text: "Two.", start: 0.8, end: 1.2 },
+      { text: "Three.", start: 3, end: 3.4 },
+    ],
+    4,
+  );
+  assert.deepEqual(lines.map((l) => l.until), [0.8, 1.4, 3.6]);
 });
 
 test("stored words read back, and anything else reads as none", () => {

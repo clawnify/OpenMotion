@@ -17,6 +17,8 @@ export interface Word {
 }
 
 export interface CaptionGroup extends Word {
+  /** When the line leaves the screen: the next line's start after a short gap, else shortly after it ends. */
+  until: number;
   words: Word[];
 }
 
@@ -29,25 +31,57 @@ export interface CharacterAlignment {
 
 const ms = (n: number) => Math.round(n * 1000) / 1000;
 
+/**
+ * Scripts written without spaces between words (Chinese, Japanese, Thai, ...).
+ * A run of them is split into words by the runtime's own word segmenter, and
+ * their words are joined back without a space.
+ */
+const UNSPACED = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u;
+
 /** Characters with times -> words with times. Punctuation stays on its word, as it is read. */
 export function wordsFromAlignment(a: CharacterAlignment | null | undefined): Word[] {
   if (!a) return [];
-  const words: Word[] = [];
-  let text = "";
-  let start = 0;
-  let end = 0;
   const n = Math.min(a.characters.length, a.character_start_times_seconds.length, a.character_end_times_seconds.length);
-  for (let i = 0; i <= n; i++) {
-    const ch = i < n ? a.characters[i] : " ";
-    if (/^\s*$/.test(ch)) {
-      if (text) words.push({ text, start: ms(start), end: ms(end) });
-      text = "";
-      continue;
+  const words: Word[] = [];
+  // A run of non-space characters, as indexes into the alignment.
+  let run: number[] = [];
+  const word = (from: number, to: number) => {
+    words.push({
+      text: run.slice(from, to).map((i) => a.characters[i]).join(""),
+      start: ms(a.character_start_times_seconds[run[from]]),
+      end: ms(a.character_end_times_seconds[run[to - 1]]),
+    });
+  };
+  const flush = () => {
+    if (!run.length) return;
+    const text = run.map((i) => a.characters[i]).join("");
+    if (!UNSPACED.test(text)) {
+      word(0, run.length);
+    } else {
+      // Where each segment of the run starts, as a position in `run`.
+      const at: number[] = [];
+      run.forEach((i, k) => {
+        for (let u = 0; u < a.characters[i].length; u++) at.push(k);
+      });
+      let from = 0;
+      let open = false; // the current word has its letters (not only leading punctuation)
+      for (const seg of new Intl.Segmenter(undefined, { granularity: "word" }).segment(text)) {
+        const k = at[seg.index];
+        if (seg.isWordLike && open) {
+          word(from, k);
+          from = k;
+        }
+        if (seg.isWordLike) open = true;
+      }
+      word(from, run.length);
     }
-    if (!text) start = a.character_start_times_seconds[i];
-    text += ch;
-    end = a.character_end_times_seconds[i];
+    run = [];
+  };
+  for (let i = 0; i < n; i++) {
+    if (/^\s*$/.test(a.characters[i])) flush();
+    else run.push(i);
   }
+  flush();
   return words;
 }
 
@@ -79,13 +113,18 @@ export function parseWords(raw: string | null | undefined): Word[] | null {
 const SENTENCE_END = /[.!?…。！？]["'”’)\]]*$/;
 const CLAUSE_END = /[,;:，、；：–—]["'”’)\]]*$/;
 export const PAUSE = 0.15;
+/** A gap shorter than this keeps the line up until the next one. */
+const HOLD = 0.5;
+/** Otherwise a line stays this long after its last word. */
+const LINGER = 0.2;
 
 /**
  * Words -> caption lines of at most `maxWords`. A line never runs across a
  * sentence end, a comma or similar, or a pause; a phrase longer than the limit
  * is split into lines of even length ("Captions should land / on the words.",
  * not "Captions should land on / the words."). `offset` moves every time by
- * where the clip starts in the video, so the lines can be placed as they are.
+ * where the clip starts in the video, so the lines can be placed as they are;
+ * `until` says when each leaves the screen.
  */
 export function groupWords(words: Word[], maxWords = 4, offset = 0): CaptionGroup[] {
   const max = Math.max(1, Math.floor(maxWords));
@@ -108,13 +147,22 @@ export function groupWords(words: Word[], maxWords = 4, offset = 0): CaptionGrou
       const size = Math.floor(p.length / lines) + (l < p.length % lines ? 1 : 0);
       const shifted = p.slice(at, at + size).map((w) => ({ text: w.text, start: ms(w.start + offset), end: ms(w.end + offset) }));
       at += size;
-      groups.push({
-        text: shifted.map((w) => w.text).join(" "),
-        start: shifted[0].start,
-        end: shifted[shifted.length - 1].end,
-        words: shifted,
-      });
+      const last = shifted[shifted.length - 1];
+      groups.push({ text: joinWords(shifted), start: shifted[0].start, end: last.end, until: ms(last.end + LINGER), words: shifted });
     }
   }
+  // Hold a line until the next one when the gap is short, so captions don't blink.
+  groups.forEach((g, i) => {
+    const next = groups[i + 1];
+    if (next && next.start - g.end < HOLD) g.until = next.start;
+  });
   return groups;
+}
+
+/** Words as a line: spaced, except between words of a script written without spaces. */
+function joinWords(words: Word[]): string {
+  return words.reduce((line, w, i) => {
+    if (i === 0) return w.text;
+    return line + (UNSPACED.test(words[i - 1].text) && UNSPACED.test(w.text) ? "" : " ") + w.text;
+  }, "");
 }
