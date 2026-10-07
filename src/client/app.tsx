@@ -1120,7 +1120,7 @@ function Editor({
             onSeek={seek}
             onTogglePlay={togglePlay}
             onChange={onTimelineChange}
-            formatTime={(t) => fmtTC(t, fps)}
+            formatTime={fmtClock}
           />
         )}
           </div>
@@ -1371,15 +1371,12 @@ function clipIcon(type: ClipType) {
   if (type === "audio") return <Music className={c} />;
   return <TypeIcon className={c} />;
 }
-/** Frame timecode MM:SS.FF (Remotion-style). */
-function fmtTC(t: number, fps: number) {
-  const total = Math.max(0, t);
-  const m = Math.floor(total / 60);
-  const s = Math.floor(total % 60);
-  let f = Math.round((total - Math.floor(total)) * fps);
-  if (f >= fps) f = fps - 1;
+/** The playhead in seconds, MM:SS.ss: the unit the inspector, the ruler and the
+ *  composition use. A frame timecode (MM:SS.FF) read 31.6 s as "00:31.18". */
+function fmtClock(t: number) {
+  const cs = Math.round(Math.max(0, t) * 100);
   const p = (n: number) => String(n).padStart(2, "0");
-  return `${p(m)}:${p(s)}.${p(f)}`;
+  return `${p(Math.floor(cs / 6000))}:${p(Math.floor(cs / 100) % 60)}.${p(cs % 100)}`;
 }
 
 // ── inspector ────────────────────────────────────────────────────────
