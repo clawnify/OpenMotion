@@ -218,8 +218,9 @@ evenly: every voice can carry the time of each word it speaks.
 
 Then ask for the lines, timed for the video:
 `GET /api/assets/{id}/captions?offset=<the voice clip's data-start>&max_words=4`.
-It answers `lines: [{ text, start, end, words }]`, already moved to video time,
-broken at sentence ends, at pauses of 150 ms or more, and at `max_words`
+It answers `lines: [{ text, start, end, words }]`, already moved to video time.
+A line never runs across a sentence end, a comma or a pause of 150 ms or more,
+and a longer phrase is spread evenly over lines of at most `max_words`
 (2 to 3 for a punchy short, 3 to 5 conversational, 4 to 6 calm). Paste the
 lines into the composition as they come:
 

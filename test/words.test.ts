@@ -43,9 +43,27 @@ test("a transcript keeps spoken words only", () => {
   ]);
 });
 
-test("lines break at the word limit", () => {
-  const words = ["a", "b", "c", "d", "e"].map((text, i) => ({ text, start: i * 0.2, end: i * 0.2 + 0.18 }));
-  assert.deepEqual(groupWords(words, 2).map((g) => g.text), ["a b", "c d", "e"]);
+/** Words spoken back to back, 0.2 s apart (no pauses). */
+const spoken = (line: string) => line.split(" ").map((text, i) => ({ text, start: i * 0.2, end: i * 0.2 + 0.18 }));
+
+test("a phrase over the word limit is split into lines of even length", () => {
+  assert.deepEqual(groupWords(spoken("a b c d e"), 2).map((g) => g.text), ["a b", "c d", "e"]);
+  assert.deepEqual(groupWords(spoken("Captions should land on the words."), 4).map((g) => g.text), [
+    "Captions should land",
+    "on the words.",
+  ]);
+  assert.deepEqual(groupWords(spoken("and every word knows when it is spoken"), 4).map((g) => g.text), [
+    "and every word knows",
+    "when it is spoken",
+  ]);
+});
+
+test("a line never runs across a comma", () => {
+  assert.deepEqual(groupWords(spoken("This voice costs $5 a month, and every word"), 4).map((g) => g.text), [
+    "This voice costs",
+    "$5 a month,",
+    "and every word",
+  ]);
 });
 
 test("lines break at a sentence end and at a pause", () => {

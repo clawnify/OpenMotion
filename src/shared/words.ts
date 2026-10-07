@@ -7,7 +7,8 @@
 // and placing each line where the clip plays, which is what `groupWords` does.
 //
 // The grouping follows HyperFrames' caption rules: break at the end of a
-// sentence, at a pause of 150 ms or more, or at the word limit.
+// sentence, at a pause of 150 ms or more, or at the word limit; and also at a
+// comma, with a long phrase spread evenly over its lines.
 
 export interface Word {
   text: string;
@@ -76,33 +77,44 @@ export function parseWords(raw: string | null | undefined): Word[] | null {
 }
 
 const SENTENCE_END = /[.!?…。！？]["'”’)\]]*$/;
+const CLAUSE_END = /[,;:，、；：–—]["'”’)\]]*$/;
 export const PAUSE = 0.15;
 
 /**
- * Words -> caption lines: at most `maxWords` each, broken at a sentence end or
- * a pause. `offset` moves every time by where the clip starts in the video,
- * so the lines can be placed as they are.
+ * Words -> caption lines of at most `maxWords`. A line never runs across a
+ * sentence end, a comma or similar, or a pause; a phrase longer than the limit
+ * is split into lines of even length ("Captions should land / on the words.",
+ * not "Captions should land on / the words."). `offset` moves every time by
+ * where the clip starts in the video, so the lines can be placed as they are.
  */
 export function groupWords(words: Word[], maxWords = 4, offset = 0): CaptionGroup[] {
   const max = Math.max(1, Math.floor(maxWords));
-  const groups: CaptionGroup[] = [];
-  let line: Word[] = [];
-  const close = () => {
-    if (!line.length) return;
-    const shifted = line.map((w) => ({ text: w.text, start: ms(w.start + offset), end: ms(w.end + offset) }));
-    groups.push({
-      text: shifted.map((w) => w.text).join(" "),
-      start: shifted[0].start,
-      end: shifted[shifted.length - 1].end,
-      words: shifted,
-    });
-    line = [];
-  };
+  const phrases: Word[][] = [];
+  let phrase: Word[] = [];
   words.forEach((w, i) => {
-    line.push(w);
+    phrase.push(w);
     const next = words[i + 1];
-    if (line.length >= max || SENTENCE_END.test(w.text) || (next && next.start - w.end >= PAUSE)) close();
+    if (!next || SENTENCE_END.test(w.text) || CLAUSE_END.test(w.text) || next.start - w.end >= PAUSE) {
+      phrases.push(phrase);
+      phrase = [];
+    }
   });
-  close();
+
+  const groups: CaptionGroup[] = [];
+  for (const p of phrases) {
+    const lines = Math.ceil(p.length / max);
+    let at = 0;
+    for (let l = 0; l < lines; l++) {
+      const size = Math.floor(p.length / lines) + (l < p.length % lines ? 1 : 0);
+      const shifted = p.slice(at, at + size).map((w) => ({ text: w.text, start: ms(w.start + offset), end: ms(w.end + offset) }));
+      at += size;
+      groups.push({
+        text: shifted.map((w) => w.text).join(" "),
+        start: shifted[0].start,
+        end: shifted[shifted.length - 1].end,
+        words: shifted,
+      });
+    }
+  }
   return groups;
 }
