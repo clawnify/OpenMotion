@@ -45,6 +45,12 @@ export async function getUploadBytes(key: string): Promise<ArrayBuffer | null> {
   return obj.arrayBuffer();
 }
 
+/** The object as a Blob, to send on (one copy in memory, not two). */
+export async function getUploadBlob(key: string): Promise<Blob | null> {
+  const obj = await _bucket.get(key);
+  return obj ? obj.blob() : null;
+}
+
 export async function deleteUpload(key: string): Promise<void> {
   await _bucket.delete(key);
 }
