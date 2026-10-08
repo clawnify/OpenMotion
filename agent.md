@@ -117,6 +117,9 @@ Media the user uploads lives in the **Media library** and is referenced from the
 HTML by path: `assets/<key>`. Reference it as `<img src="assets/logo.png">` or
 `<video src="assets/demo.mp4">`. At render time the app automatically ships only
 the assets your HTML actually references — you don't attach them manually.
+Images, video and sound of any size the library took are fine: the app hands
+them to the render service once and reuses that copy for about 30 days. Other
+files (an SVG, a font) go with each export and must stay under 20 MB together.
 
 To list what's available: `GET /api/assets` → `[{ id, key, name, content_type,
 duration }]`. A sound also carries `loudness` and `peak_at` (see Music and sound
