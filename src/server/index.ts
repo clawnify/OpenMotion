@@ -9,13 +9,13 @@ import {
   deleteUpload,
   makeKey,
 } from "./uploads";
-import { startRender } from "./render";
+import { startRender, type RenderAsset, type RenderIO } from "./render";
 import { settle, type RenderJob, type SettleIO } from "./exports";
 import { compositionLength, withLength } from "../shared/length";
 import { lintComposition } from "./lint";
 import { z } from "zod";
 import { type ScreenDemoOptions, screenDemoHtml, screenDemoProblems, defaultSeconds, demoSpecOf, fitSeconds, minimumSeconds, replaceDemoSteps, withDemoSpec } from "../shared/screen-demo";
-import { capturePage, outlinePage, getVideoRender, ClawnifyServicesError, type CaptureStep, type CapturedPage } from "@clawnify/services";
+import { capturePage, outlinePage, getVideoRender, stageFile, startVideoRender, ClawnifyServicesError, type CaptureStep, type CapturedPage } from "@clawnify/services";
 import { connect, type ConnectionsEnv, type CredentialBinding } from "@clawnify/connections";
 import { caller, user } from "@clawnify/app";
 import { audioDurationSeconds } from "./audio-duration";
@@ -589,6 +589,28 @@ app.get("/api/uploads/:key{.+}", async (c) => {
 // answers at once, and the job is finished by whoever looks at it next (the
 // editor polling, an agent, the export list). See exports.ts.
 
+function renderIO(env: Bindings): RenderIO {
+  return {
+    async stage(asset) {
+      const obj = await getUpload(asset.key);
+      if (!obj) return null;
+      // The R2 body goes on as a stream: never in memory, whatever its size.
+      return stageFile(servicesEnv(env), obj.data, { contentType: asset.content_type, size: obj.size });
+    },
+    async remember(id, staged) {
+      await run("UPDATE assets SET service_key = ?, service_key_expires_at = ? WHERE id = ?", [
+        staged?.key ?? null,
+        staged?.expires_at ?? null,
+        id,
+      ]);
+    },
+    bytes: getUploadBytes,
+    async start(opts) {
+      return (await startVideoRender(servicesEnv(env), opts)).job_id;
+    },
+  };
+}
+
 function settleIO(env: Bindings): SettleIO {
   return {
     status: (id) => getVideoRender(servicesEnv(env), id),
@@ -684,8 +706,10 @@ app.post("/api/renders", async (c) => {
   const jobId = res.lastInsertRowid as number;
 
   try {
-    const assets = await query<Asset>("SELECT key FROM assets");
-    const serviceJobId = await startRender(servicesEnv(c.env), {
+    const assets = await query<RenderAsset>(
+      "SELECT id, key, content_type, size, service_key, service_key_expires_at FROM assets",
+    );
+    const serviceJobId = await startRender(renderIO(c.env), {
       html,
       fps: comp.fps,
       assets,
