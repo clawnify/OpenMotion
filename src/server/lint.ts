@@ -12,6 +12,7 @@
 // at startup would slow every cold start, including routes that never lint.
 
 import type { HyperframeLintFinding } from "@hyperframes/lint/browser";
+import { offBrandColors, paletteText, type Brand } from "../shared/brand.ts";
 
 export interface LintFinding {
   severity: "error" | "warning";
@@ -86,18 +87,37 @@ function byImportance(findings: HyperframeLintFinding[]): HyperframeLintFinding[
     .map((x) => x.f);
 }
 
+/**
+ * The app's own rule beside HyperFrames' rules: a colour with a hue that is
+ * not one of the brand's (shared/brand.ts says which colours count). One
+ * finding per colour, at its first use. A warning: a video can mean to step
+ * outside the brand, and the user can still say so.
+ */
+function brandFindings(html: string, brand: Brand | null | undefined): HyperframeLintFinding[] {
+  if (!brand) return [];
+  return offBrandColors(html, brand).map((c): HyperframeLintFinding => ({
+    severity: "warning",
+    code: "off_brand_color",
+    message: `${c.raw} is not one of the brand's colors.`,
+    fixHint: `Use a brand color (${paletteText(brand)}): as it is, lighter or darker, or at an opacity. Greys, black and white are always fine.`,
+    line: c.line,
+  }));
+}
+
 /** null when there is nothing to lint, or the linter itself failed: a lint
- *  must never be the reason a save or a read does not go through. */
-export async function lintComposition(html: string): Promise<Lint | null> {
+ *  must never be the reason a save or a read does not go through. With a
+ *  brand, colours outside it are reported too. */
+export async function lintComposition(html: string, brand?: Brand | null): Promise<Lint | null> {
   if (!html.trim()) return null;
   try {
     const { lintHyperframeHtml } = await import("@hyperframes/lint/browser");
     const result = await lintHyperframeHtml(asRendered(html));
     // "info" findings are advice about fonts and the like, not problems.
     // NOT_HERE are rules whose fix cannot be made in this app (see above).
-    const real = byImportance(
-      result.findings.filter((f) => f.severity !== "info" && !NOT_HERE.has(f.code) && !intendedSilentBase(html, f)),
-    );
+    const real = byImportance([
+      ...result.findings.filter((f) => f.severity !== "info" && !NOT_HERE.has(f.code) && !intendedSilentBase(html, f)),
+      ...brandFindings(html, brand),
+    ]);
     return {
       errors: real.filter((f) => f.severity === "error").length,
       warnings: real.filter((f) => f.severity === "warning").length,
