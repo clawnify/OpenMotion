@@ -54,9 +54,10 @@ When `set` is true:
 
 - **Colours are strict.** Use the hex values as given, for the role they
   name: `background` behind everything (keep a light brand light), `text` for
-  copy, `accent` for the one thing to look at, `secondary` for the rest. Any
-  of them at an opacity is fine, and so are greys, black and white (shadows,
-  scrims). A field that is `null` is free.
+  copy, `accent` for the one thing to look at, `secondary` for the rest. A
+  lighter or darker shade of one (same hue), or one at an opacity, is fine,
+  and so are greys, black and white (shadows, scrims). Do not invent a new
+  hue. A field that is `null` is free.
 - **Fonts are strict.** Name them in `font-family` exactly as given, with a
   generic fallback: `font-family:'Playfair Display',serif`. The renderer
   fetches any Google Fonts family by that name; do not add a `<link>` for it.

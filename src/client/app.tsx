@@ -1983,7 +1983,7 @@ function BrandPage() {
               ))}
               {badColor && <p className="text-fine text-danger">Write each colour as #rrggbb, for example #e4572e.</p>}
               <p className="text-fine text-faint">
-                Greys, black and white always count as on brand, and so does any brand colour at an opacity.
+                Greys, black and white always count as on brand, and so does a lighter, darker or see-through brand colour.
               </p>
             </section>
 

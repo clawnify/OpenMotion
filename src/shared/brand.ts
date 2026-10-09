@@ -7,7 +7,10 @@
 // design-systems.mdx, frame.md): colours and type are strict, layout and
 // motion are free. So the check below is about colour only, and only about
 // hues: greys, black and white are always allowed (shadows, scrims, frames
-// around a screenshot), and so is any opacity of a brand colour.
+// around a screenshot), and so is any shade or opacity of a brand colour.
+// That is what HyperFrames' own brand mapping makes (skills/*/scripts/
+// build-frame.mjs: a colour takes the brand's hue and saturation and keeps
+// its own lightness), so a lighter accent for a card is on brand.
 //
 // Pure functions, no DOM, so they run in the Worker, the browser and the tests.
 
@@ -95,23 +98,49 @@ function rgbFunctionToRgb(s: string): RGB | null {
   return rgb.every((v) => v >= 0 && v <= 255) ? rgb : null;
 }
 
+/** hsl()/hsla(), in degrees (or turn/rad) and percentages. */
+function hslFunctionToRgb(s: string): RGB | null {
+  const m = s.match(/^hsla?\(\s*(-?[\d.]+)(deg|turn|rad)?[\s,]+([\d.]+)%?[\s,]+([\d.]+)%?/i);
+  if (!m) return null;
+  const unit = (m[2] || "deg").toLowerCase();
+  const turns = unit === "turn" ? +m[1] : unit === "rad" ? +m[1] / (2 * Math.PI) : +m[1] / 360;
+  const h = ((turns % 1) + 1) % 1;
+  const sat = Math.min(1, +m[3] / 100);
+  const l = Math.min(1, +m[4] / 100);
+  const k = (n: number) => (n + h * 12) % 12;
+  const a = sat * Math.min(l, 1 - l);
+  const f = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  return [f(0), f(8), f(4)].map((v) => Math.round(v * 255)) as RGB;
+}
+
 function toHex([r, g, b]: RGB): string {
   return "#" + [r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("");
 }
 
-/** No hue to speak of: a grey, or near enough black or white. */
+/**
+ * No hue to speak of: a grey, a near-black or near-white, a cream. Measured
+ * as chroma (max - min channel), not HSL saturation, which calls a barely
+ * tinted off-white fully saturated.
+ */
 function isNeutral([r, g, b]: RGB): boolean {
-  const max = Math.max(r, g, b) / 255;
-  const min = Math.min(r, g, b) / 255;
-  const l = (max + min) / 2;
-  if (l < 0.06 || l > 0.97) return true;
-  const s = max === min ? 0 : (max - min) / (1 - Math.abs(2 * l - 1));
-  return s < 0.12;
+  return (Math.max(r, g, b) - Math.min(r, g, b)) / 255 < 0.08;
 }
 
-/** Off by a rounding (a colour written as rgb() or with a slightly different hex). */
-function sameColor(a: RGB, b: RGB): boolean {
-  return Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]) <= 9;
+/** The hue in degrees, 0-360. */
+function hueOf([r, g, b]: RGB): number {
+  const max = Math.max(r, g, b);
+  const d = max - Math.min(r, g, b);
+  if (d === 0) return 0;
+  const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return (h * 60 + 360) % 360;
+}
+
+/** How far apart two hues may be and still be one colour, lighter or darker. */
+const HUE_SLACK = 15;
+
+function hueDistance(a: number, b: number): number {
+  const d = Math.abs(a - b) % 360;
+  return d > 180 ? 360 - d : d;
 }
 
 /**
@@ -138,14 +167,14 @@ function scriptPieces(html: string): { text: string; at: number }[] {
   const out: { text: string; at: number }[] = [];
   for (const m of html.matchAll(/<script\b(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)) {
     const base = m.index! + m[0].indexOf(m[1]);
-    for (const s of m[1].matchAll(/(["'`])((?:#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?)|rgba?\([^)"'`]*\))\1/g)) {
+    for (const s of m[1].matchAll(/(["'`])((?:#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?)|(?:rgb|hsl)a?\([^)"'`]*\))\1/g)) {
       out.push({ text: s[2], at: base + s.index! + 1 });
     }
   }
   return out;
 }
 
-const COLOR_TOKEN = /#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)/g;
+const COLOR_TOKEN = /#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)|hsla?\([^)]*\)/g;
 
 export interface ColorUse {
   /** As written. */
@@ -160,7 +189,11 @@ export function colorsIn(html: string): ColorUse[] {
   const seen = new Map<string, ColorUse>();
   for (const piece of [...cssPieces(html), ...scriptPieces(html)]) {
     for (const m of piece.text.matchAll(COLOR_TOKEN)) {
-      const rgb = m[0].startsWith("#") ? hexToRgb(m[0]) : rgbFunctionToRgb(m[0]);
+      const rgb = m[0].startsWith("#")
+        ? hexToRgb(m[0])
+        : /^hsl/i.test(m[0])
+          ? hslFunctionToRgb(m[0])
+          : rgbFunctionToRgb(m[0]);
       if (!rgb) continue;
       // A url(#gradient) or href="#id" is not a colour; hexToRgb already
       // refused anything with a non-hex letter, and a url() fragment is
@@ -181,16 +214,20 @@ export interface OffBrandColor extends ColorUse {
 
 /**
  * Colours with a hue that is in none of the brand's colours. Empty when the
- * brand names no colour: then there is nothing to be off.
+ * brand names no colour: then there is nothing to be off. A brand of only
+ * neutrals (black, white, greys) makes every hue off.
  */
 export function offBrandColors(html: string, brand: Brand | null | undefined): OffBrandColor[] {
   if (!brand) return [];
   const palette = brandColors(brand).map((c) => hexToRgb(c.hex)!);
   if (!palette.length) return [];
+  const hues = palette.filter((p) => !isNeutral(p)).map(hueOf);
   return colorsIn(html)
     .filter((c) => {
       const rgb = hexToRgb(c.hex)!;
-      return !isNeutral(rgb) && !palette.some((p) => sameColor(p, rgb));
+      if (isNeutral(rgb)) return false;
+      const h = hueOf(rgb);
+      return !hues.some((b) => hueDistance(b, h) <= HUE_SLACK);
     })
     .map((c) => ({ ...c, line: html.slice(0, c.at).split("\n").length }));
 }

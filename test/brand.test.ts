@@ -120,3 +120,28 @@ test("colours pasted from brand guidelines become #rrggbb", () => {
   assert.equal(normalHex("#abc"), "#aabbcc");
   assert.equal(normalHex("red"), "red");
 });
+
+test("a lighter or darker shade of a brand colour is on brand, a new hue is not, in hex and hsl()", () => {
+  const html = [
+    `<div style="background:#fff8ef">`,
+    `<p style="color:#f4a78f">accent, lighter</p>`,
+    `<p style="color:#8a2f14">accent, darker</p>`,
+    `<p style="color:hsl(13 77% 54%)">accent as hsl</p>`,
+    `<p style="color:hsla(263deg, 80%, 55%, 0.5)">purple as hsl</p>`,
+    `<p style="color:#e4a72e">amber: 40 degrees from the accent</p>`,
+    `</div>`,
+  ].join("\n");
+  assert.deepEqual(
+    offBrandColors(html, BRAND).map((c) => [c.raw, c.line]),
+    [
+      ["hsla(263deg, 80%, 55%, 0.5)", 5],
+      ["#e4a72e", 6],
+    ],
+  );
+});
+
+test("a brand of only black and white makes every hue off, and a cream still counts as neutral", () => {
+  const mono: Brand = { ...EMPTY_BRAND, background: "#ffffff", text: "#111111" };
+  const off = offBrandColors(`<p style="color:#fff8ef;background:#e4572e">x</p>`, mono);
+  assert.deepEqual(off.map((c) => c.hex), ["#e4572e"]);
+});

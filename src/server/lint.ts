@@ -99,7 +99,7 @@ function brandFindings(html: string, brand: Brand | null | undefined): Hyperfram
     severity: "warning",
     code: "off_brand_color",
     message: `${c.raw} is not one of the brand's colors.`,
-    fixHint: `Use a brand color (${paletteText(brand)}), or one of them at an opacity. Greys, black and white are always fine.`,
+    fixHint: `Use a brand color (${paletteText(brand)}): as it is, lighter or darker, or at an opacity. Greys, black and white are always fine.`,
     line: c.line,
   }));
 }
