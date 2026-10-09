@@ -37,6 +37,47 @@ The editor reloads the preview after your write and keeps the playhead where
 it was. When the user has unsaved edits it asks them before taking your
 version, so a write never silently replaces their work.
 
+## The brand
+
+The user can save a brand once (the Brand page, `/brand`): colours by role,
+a heading and a body font, a logo, and notes. Read it with `GET /api/brand`
+before you write or restyle a video:
+
+```json
+{ "set": true, "background": "#fff8ef", "text": "#1d1a16", "accent": "#e4572e",
+  "secondary": "#2e86ab", "heading_font": "Playfair Display", "body_font": "Inter",
+  "logo_asset_id": "5b1d…", "logo": { "id": "5b1d…", "key": "acme-logo.svg", … },
+  "notes": "Calm. No exclamation marks." }
+```
+
+When `set` is true:
+
+- **Colours are strict.** Use the hex values as given, for the role they
+  name: `background` behind everything (keep a light brand light), `text` for
+  copy, `accent` for the one thing to look at, `secondary` for the rest. Any
+  of them at an opacity is fine, and so are greys, black and white (shadows,
+  scrims). A field that is `null` is free.
+- **Fonts are strict.** Name them in `font-family` exactly as given, with a
+  generic fallback: `font-family:'Playfair Display',serif`. The renderer
+  fetches any Google Fonts family by that name; do not add a `<link>` for it.
+- **The logo** is `assets/<logo.key>`. Show it where the notes say, or at the
+  start and the end. Never stretch it: set one of width or height.
+- **Notes** are the user's own do's and don'ts: follow them.
+- Sizes, layout and motion stay yours: the brand pins colour and type, not
+  the frame.
+
+A new video made in the app already starts in the brand. A colour outside it
+comes back in `lint` as the warning `off_brand_color` (see Lint): fix it,
+unless the user asked for that colour.
+
+The user can also set it from the chat ("our colours are …"):
+`PUT /api/brand` with only the fields to change, `null` to clear one:
+`{ background, text, accent, secondary }` as `#rrggbb`,
+`{ heading_font, body_font }` as Google Fonts family names (a name Google
+Fonts does not know is refused with 400: names are case sensitive),
+`logo_asset_id` (an image asset), `notes`. `DELETE /api/brand` clears it.
+Changing the brand does not restyle existing videos: offer to, one at a time.
+
 ## Composition format (HyperFrames)
 
 A composition is one HTML fragment with a root element carrying
@@ -452,6 +493,9 @@ captions only to a demo you will not rebuild.
 | POST | `/api/compositions/screen-demo` | Build a product demo from stills you already have |
 | PUT  | `/api/compositions/{id}` | Update any of `name/description/html/fps` → the row with `lint` |
 | DELETE | `/api/compositions/{id}` | Delete |
+| GET  | `/api/brand` | The brand: colours, fonts, logo (with its `key`), notes, and `set` |
+| PUT  | `/api/brand` | Change any brand field (partial; `null` clears) → the brand |
+| DELETE | `/api/brand` | Clear the brand |
 | GET  | `/api/assets` | List the media library (a sound with its `loudness` and `peak_at`) |
 | GET  | `/api/assets/{id}` | One asset; measures an older sound on its first read |
 | GET  | `/api/voices` | The user's ElevenLabs voices: `?search=`, `?category=`, `?page_token=` |
@@ -469,7 +513,8 @@ captions only to a demo you will not rebuild.
 
 1. Read the brief. Pick dimensions (1920×1080 landscape, 1080×1080 square,
    1080×1920 vertical/reel) from the use case.
-2. `GET /api/assets` to see the user's logo / demo clips and their `key`s.
+2. `GET /api/brand` (see The brand) and `GET /api/assets` to see the user's
+   logo / demo clips and their `key`s.
 3. Write the composition HTML, referencing media as `assets/<key>`, and
    `POST /api/compositions` (or `PUT` to revise an existing one).
 4. Read `lint` in the response (see Lint). If `errors` is above 0, fix each
@@ -496,7 +541,8 @@ is the line in the HTML you sent. `findings` lists at most 10, errors first;
 the counts cover all of them. `lint` is `null` when the HTML is empty.
 
 Fix every error before you report back. Warnings are worth fixing when the fix
-is small. The editor shows the same list to the user as an "issues" badge, with
+is small. One warning is the app's own, not HyperFrames': `off_brand_color`, a
+colour whose hue is in none of the brand's colours (only when a brand is set). The editor shows the same list to the user as an "issues" badge, with
 an "Ask AI to fix" button that sends you the findings.
 
 Two HyperFrames rules are never reported, because their fix (move a scene into

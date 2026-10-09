@@ -13,6 +13,7 @@ import { startRender } from "./render";
 import { settle, type RenderJob, type SettleIO } from "./exports";
 import { compositionLength, withLength } from "../shared/length";
 import { lintComposition } from "./lint";
+import { EMPTY_BRAND, FONT_NAME, HEX, fontFamiliesIn, googleFontsHref, hasBrand, normalHex, type Brand } from "../shared/brand";
 import { z } from "zod";
 import { type ScreenDemoOptions, screenDemoHtml, screenDemoProblems, defaultSeconds, demoSpecOf, fitSeconds, minimumSeconds, replaceDemoSteps, withDemoSpec } from "../shared/screen-demo";
 import { capturePage, outlinePage, getVideoRender, ClawnifyServicesError, type CaptureStep, type CapturedPage } from "@clawnify/services";
@@ -97,7 +98,7 @@ app.get("/api/compositions", async (c) => {
 // The writes answer the same way, so whoever wrote it, the agent or the
 // editor, learns in the same response what will render wrong.
 async function withLint(row: Composition) {
-  return { ...row, lint: await lintComposition(row.html) };
+  return { ...row, lint: await lintComposition(row.html, await loadBrand()) };
 }
 
 app.get("/api/compositions/:id", async (c) => {
@@ -455,6 +456,105 @@ app.get("/api/compositions/:id/preview", async (c) => {
   return c.html(previewDoc(row.html));
 });
 
+// ── Brand ────────────────────────────────────────────────────────────
+// One row or none (shared/brand.ts says what each field is for). The agent
+// reads it before it writes a video, a new video starts in it, and the lint
+// checks colours against it.
+
+async function loadBrand(): Promise<Brand | null> {
+  const row = await get<Brand>("SELECT * FROM brand WHERE id = 1");
+  return row ? { ...EMPTY_BRAND, ...row } : null;
+}
+
+// The brand with its logo's asset, so whoever reads it can reference the
+// logo as `assets/<key>` straight away. `set` is false while it says nothing.
+async function brandView() {
+  const brand = (await loadBrand()) ?? EMPTY_BRAND;
+  const logo = brand.logo_asset_id
+    ? await get<Asset>("SELECT id, key, name, content_type FROM assets WHERE id = ?", [brand.logo_asset_id])
+    : null;
+  return { ...brand, set: hasBrand(brand), logo };
+}
+
+app.get("/api/brand", async (c) => c.json(await brandView()));
+
+const color = z
+  .string()
+  .transform(normalHex)
+  .refine((v) => HEX.test(v), "a colour is #rrggbb")
+  .nullable();
+const font = z
+  .string()
+  .transform((v) => v.trim())
+  .refine((v) => FONT_NAME.test(v), "a font is a Google Fonts family name, e.g. Playfair Display")
+  .nullable();
+const brandBody = z
+  .object({
+    background: color,
+    text: color,
+    accent: color,
+    secondary: color,
+    heading_font: font,
+    body_font: font,
+    logo_asset_id: z.string().nullable(),
+    notes: z.string().max(4000),
+  })
+  .partial()
+  .strict();
+
+/**
+ * Whether Google Fonts knows the family. The renderer fetches a font by its
+ * exact name and quietly falls back to a system font when the name is wrong
+ * ("inter", "Monsterrat"), so a wrong name is caught here, when it is typed.
+ * null when Google Fonts cannot be reached: then the name is kept unchecked.
+ */
+async function googleFontExists(family: string): Promise<boolean | null> {
+  try {
+    const r = await fetch(googleFontsHref(family));
+    if (r.ok) return true;
+    return r.status === 400 ? false : null;
+  } catch {
+    return null;
+  }
+}
+
+// Partial: what the body leaves out stays as it is, null clears a field.
+app.put("/api/brand", async (c) => {
+  const parsed = brandBody.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: "Invalid brand", problems: problems(parsed.error) }, 400);
+  const b = parsed.data;
+  const warnings: string[] = [];
+  for (const field of ["heading_font", "body_font"] as const) {
+    const name = b[field];
+    if (!name) continue;
+    const known = await googleFontExists(name);
+    if (known === false) {
+      return c.json({ error: `${name} is not a Google Fonts family. Names are case sensitive: check it on fonts.google.com.` }, 400);
+    }
+    if (known === null) warnings.push(`Could not reach Google Fonts to check ${name}; kept as typed.`);
+  }
+  if (b.logo_asset_id) {
+    const logo = await get<Asset>("SELECT content_type FROM assets WHERE id = ?", [b.logo_asset_id]);
+    if (!logo) return c.json({ error: "logo_asset_id: no such asset" }, 400);
+    if (!logo.content_type.startsWith("image/")) return c.json({ error: "logo_asset_id: the logo must be an image" }, 400);
+  }
+  const next = { ...((await loadBrand()) ?? EMPTY_BRAND), ...b };
+  await run(
+    `INSERT INTO brand (id, background, text, accent, secondary, heading_font, body_font, logo_asset_id, notes, updated_at)
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+     ON CONFLICT (id) DO UPDATE SET background = excluded.background, text = excluded.text, accent = excluded.accent,
+       secondary = excluded.secondary, heading_font = excluded.heading_font, body_font = excluded.body_font,
+       logo_asset_id = excluded.logo_asset_id, notes = excluded.notes, updated_at = excluded.updated_at`,
+    [next.background, next.text, next.accent, next.secondary, next.heading_font, next.body_font, next.logo_asset_id, next.notes],
+  );
+  return c.json({ ...(await brandView()), ...(warnings.length ? { warnings } : {}) });
+});
+
+app.delete("/api/brand", async (c) => {
+  await run("DELETE FROM brand WHERE id = 1");
+  return c.json(await brandView());
+});
+
 // ── Assets (media library) ───────────────────────────────────────────
 
 interface Asset {
@@ -540,6 +640,7 @@ app.delete("/api/assets/:id", async (c) => {
   if (row) {
     await deleteUpload(row.key);
     await run("DELETE FROM assets WHERE id = ?", [row.id]);
+    await run("UPDATE brand SET logo_asset_id = NULL WHERE logo_asset_id = ?", [row.id]);
   }
   return c.json({ ok: true });
 });
@@ -1199,7 +1300,13 @@ function previewDoc(html: string): string {
   // needs, since it writes files into the project's assets/ dir). The preview
   // iframe has no such dir, so rewrite those references to the served R2 URL.
   const rewritten = html.replace(/(["'(])assets\//g, "$1/api/uploads/");
+  // The renderer embeds every Google Fonts family the composition names, by
+  // name; the preview loads the same ones, or it shows a system font instead.
+  const fonts = fontFamiliesIn(html)
+    .map((f) => `<link rel="stylesheet" href="${googleFontsHref(f).replace(/&/g, "&amp;")}" />`)
+    .join("\n");
   return `<!doctype html><html><head><meta charset="utf-8" />
+${fonts}
 <style>html,body{margin:0;padding:0;background:#000;overflow:hidden}</style>
 <style id="om-unfitted">body > [data-composition-id]{opacity:0}</style>
 </head><body>

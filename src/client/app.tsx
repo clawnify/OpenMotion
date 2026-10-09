@@ -16,6 +16,7 @@ import { Timeline, type TimelineEdit } from "./timeline";
 import { compositionLength } from "../shared/length";
 import type { Lint } from "../server/lint";
 import { shiftTweenPositions } from "../shared/tween-shift";
+import { BUNDLED_FONTS, COLOR_ROLES, EMPTY_BRAND, HEX, brandColors, googleFontsHref, normalHex, type Brand, type ColorRole } from "../shared/brand";
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import {
   ArrowLeft,
@@ -36,6 +37,7 @@ import {
   ChevronDown,
   Sparkles,
   Download,
+  Palette,
 } from "lucide-react";
 import {
   Command,
@@ -93,6 +95,13 @@ interface RenderJob {
   phase?: "queued" | "running";
 }
 
+/** GET /api/brand: the brand, its logo's asset, and whether it says anything. */
+interface BrandView extends Brand {
+  set: boolean;
+  logo: Pick<Asset, "id" | "key" | "name" | "content_type"> | null;
+  warnings?: string[];
+}
+
 // ── api ──────────────────────────────────────────────────────────────
 
 async function errText(r: Response): Promise<string> {
@@ -144,15 +153,16 @@ function useRouter() {
 
 export function App() {
   const { path, navigate } = useRouter();
-  // "/" → gallery; "/<id>" → composition editor.
-  const id = decodeURIComponent(path.replace(/^\/+|\/+$/g, ""));
+  // "/" → gallery; "/brand" → the brand; "/<id>" → composition editor.
+  const route = decodeURIComponent(path.replace(/^\/+|\/+$/g, ""));
+  const id = route === "brand" ? "" : route;
 
   return (
     <div className="h-dvh flex flex-col text-foreground">
       {/* Brand row: the app icon is the identity object, and the accent hue
           lives here (plus count badges and the focus ring) and nowhere else. */}
       <header className="flex items-center gap-2 px-5 h-14 border-b border-border bg-surface shrink-0">
-        {id && (
+        {route && (
           <button onClick={() => navigate("/")} className={`${btnGhost} -ml-2`}>
             <ArrowLeft className="w-4 h-4" /> Videos
           </button>
@@ -168,7 +178,9 @@ export function App() {
         <div id="ove-topbar-actions" className="ml-auto flex items-center gap-2" />
       </header>
 
-      {id ? (
+      {route === "brand" ? (
+        <BrandPage />
+      ) : id ? (
         <EditorRoute id={id} navigate={navigate} />
       ) : (
         <Gallery navigate={navigate} />
@@ -191,6 +203,7 @@ function Gallery({ navigate }: { navigate: (to: string) => void }) {
   const [comps, setComps] = useState<Composition[] | null>(null);
   const [creating, setCreating] = useState(false);
   const hasChat = useHasChat();
+  const [brand] = useBrand();
 
   const load = useCallback(() => {
     api.get<Composition[]>("/api/compositions").then(setComps).catch(() => setComps([]));
@@ -208,7 +221,7 @@ function Gallery({ navigate }: { navigate: (to: string) => void }) {
         // "Untitled" tell you nothing; this agrees with the thumbnail and says
         // what kind of object you just got.
         name: "Product launch title card",
-        html: starterHtml(shape.width, shape.height),
+        html: starterHtml(shape.width, shape.height, brand, brand?.logo?.key),
       });
       navigate(`/${c.id}`);
     } finally {
@@ -233,14 +246,20 @@ function Gallery({ navigate }: { navigate: (to: string) => void }) {
               rendered to MP4.
             </p>
           </div>
-          {comps && comps.length > 0 && (
-            <ShapeMenu align="end" onPick={newVideo}>
-              <button disabled={creating} className={`${hasChat ? btnSecondary : btnPrimary} shrink-0`}>
-                {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                New video
-              </button>
-            </ShapeMenu>
-          )}
+          <div className="flex items-center gap-2 shrink-0">
+            <button onClick={() => navigate("/brand")} className={btnGhost} title="The colours, fonts and logo your videos use">
+              {brand && brandColors(brand).length ? <Swatches brand={brand} /> : <Palette className="w-4 h-4" />}
+              Brand
+            </button>
+            {comps && comps.length > 0 && (
+              <ShapeMenu align="end" onPick={newVideo}>
+                <button disabled={creating} className={`${hasChat ? btnSecondary : btnPrimary} shrink-0`}>
+                  {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                  New video
+                </button>
+              </ShapeMenu>
+            )}
+          </div>
         </div>
 
         {hasChat && <DescribeVideo />}
@@ -573,6 +592,7 @@ function Editor({
   // Bumped on every write the chat makes, so the panels refetch.
   const [changes, setChanges] = useState(0);
   const hasChat = useHasChat();
+  const [brand] = useBrand();
   // Undo: whole-composition snapshots, one per gesture or burst of typing.
   const history = useRef<{ past: string[]; future: string[] }>({ past: [], future: [] });
   const [, bumpHistory] = useState(0);
@@ -984,6 +1004,7 @@ function Editor({
                 <Inspector
                   key={selClip.index}
                   clip={selClip}
+                  brand={brand}
                   onChange={(p) => updateClip(selClip.index, p)}
                   onClose={() => setSelectedClip(null)}
                 />
@@ -1404,10 +1425,12 @@ const inputCls = "field";
 /** Right-side quick editor for the selected clip — fields depend on the clip type. */
 function Inspector({
   clip,
+  brand,
   onChange,
   onClose,
 }: {
   clip: Clip;
+  brand: Brand | null;
   onChange: (patch: ClipPatch) => void;
   onClose: () => void;
 }) {
@@ -1469,6 +1492,21 @@ function Inspector({
                   placeholder="#ffffff"
                 />
               </div>
+              {brand && brandColors(brand).length > 0 && (
+                <div className="flex items-center gap-1.5 mt-1.5">
+                  {brandColors(brand).map((c) => (
+                    <button
+                      key={c.role}
+                      type="button"
+                      onClick={() => onChange({ color: c.hex })}
+                      className="w-6 h-6 rounded-xs shadow-edge"
+                      style={{ background: c.hex }}
+                      aria-label={`Brand ${c.role} ${c.hex}`}
+                      title={`Brand ${c.role} ${c.hex}`}
+                    />
+                  ))}
+                </div>
+              )}
             </Field>
             <Field label="Font size">
               <input
@@ -1734,6 +1772,375 @@ function MediaSidebar({ changes, onAdd }: { changes: number; onAdd: (a: Asset) =
           onClose={() => setConfirmDel(null)}
         />
       )}
+    </div>
+  );
+}
+
+// ── brand ────────────────────────────────────────────────────────────
+
+/** The brand, refetched when the chat changes it. null until it loads. */
+function useBrand(): [BrandView | null, () => void] {
+  const [brand, setBrand] = useState<BrandView | null>(null);
+  const load = useCallback(() => {
+    api.get<BrandView>("/api/brand").then(setBrand).catch(() => setBrand(null));
+  }, []);
+  useEffect(load, [load]);
+  useHostChanges(load);
+  return [brand, load];
+}
+
+/** Loads Google Fonts families into this page, so a font shows as itself. */
+function useGoogleFonts(families: (string | null | undefined)[]) {
+  const key = families.filter(Boolean).join("|");
+  useEffect(() => {
+    for (const f of key ? key.split("|") : []) {
+      const id = `gf-${f.toLowerCase().replace(/\s+/g, "-")}`;
+      if (document.getElementById(id)) continue;
+      const link = document.createElement("link");
+      link.id = id;
+      link.rel = "stylesheet";
+      link.href = googleFontsHref(f).replace("display=block", "display=swap");
+      document.head.appendChild(link);
+    }
+  }, [key]);
+}
+
+function Swatches({ brand }: { brand: Brand }) {
+  return (
+    <span className="flex -space-x-1">
+      {brandColors(brand).map((c) => (
+        <span key={c.role} className="w-3.5 h-3.5 rounded-full shadow-edge" style={{ background: c.hex }} />
+      ))}
+    </span>
+  );
+}
+
+const COLOR_LABEL: Record<ColorRole, { name: string; hint: string }> = {
+  background: { name: "Background", hint: "Behind everything" },
+  text: { name: "Text", hint: "Titles and body copy" },
+  accent: { name: "Accent", hint: "Highlights: the kicker, a key word, a button" },
+  secondary: { name: "Secondary", hint: "Subtitles, shapes, a second highlight" },
+};
+
+type BrandDraft = Omit<Brand, "logo_asset_id"> & { logo_asset_id: string | null };
+
+function draftOf(b: BrandView | null): BrandDraft {
+  const { background, text, accent, secondary, heading_font, body_font, logo_asset_id, notes } = { ...EMPTY_BRAND, ...b };
+  return { background, text, accent, secondary, heading_font, body_font, logo_asset_id, notes };
+}
+
+/**
+ * The brand, set once: every new video starts in it, the AI reads it before
+ * it writes one, and the issues badge flags a colour outside it.
+ */
+function BrandPage() {
+  const [brand, reload] = useBrand();
+  const [draft, setDraft] = useState<BrandDraft>(() => draftOf(null));
+  const [images, setImages] = useState<Asset[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  useChatContext({ label: "Brand" });
+
+  // A brand that arrives (first load, or the chat changed it) replaces the
+  // form only while it holds nothing unsaved.
+  const loaded = useRef<BrandDraft | null>(null);
+  useEffect(() => {
+    if (!brand) return;
+    const next = draftOf(brand);
+    // Compared with what was loaded before this one: the updater runs later,
+    // after the ref already holds `next`.
+    const before = loaded.current;
+    loaded.current = next;
+    setDraft((d) => (!before || JSON.stringify(d) === JSON.stringify(before) ? next : d));
+  }, [brand]);
+
+  const loadImages = useCallback(() => {
+    api.get<Asset[]>("/api/assets").then((all) => setImages(all.filter((a) => a.content_type.startsWith("image/")))).catch(() => {});
+  }, []);
+  useEffect(loadImages, [loadImages]);
+
+  useGoogleFonts([draft.heading_font, draft.body_font, ...BUNDLED_FONTS]);
+
+  const dirty = !!loaded.current && JSON.stringify(draft) !== JSON.stringify(loaded.current);
+  const badColor = COLOR_ROLES.find((r) => draft[r] !== null && !HEX.test(normalHex(draft[r]!)));
+  const set = <K extends keyof BrandDraft>(k: K, v: BrandDraft[K]) => {
+    setDraft((d) => ({ ...d, [k]: v }));
+    setError(null);
+    setNotice(null);
+  };
+
+  async function save() {
+    setSaving(true);
+    setError(null);
+    try {
+      const next = await api.send<BrandView>("PUT", "/api/brand", {
+        ...draft,
+        heading_font: draft.heading_font?.trim() || null,
+        body_font: draft.body_font?.trim() || null,
+      });
+      loaded.current = draftOf(next);
+      setDraft(draftOf(next));
+      setNotice(next.warnings?.join(" ") || "Saved. New videos start in it; ask the AI to restyle an existing one.");
+      reload();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function reset() {
+    setConfirmReset(false);
+    await api.send("DELETE", "/api/brand");
+    loaded.current = null;
+    setDraft(draftOf(null));
+    reload();
+  }
+
+  async function upload(files: FileList | null) {
+    const f = files?.[0];
+    if (!f) return;
+    const fd = new FormData();
+    fd.append("file", f);
+    const r = await fetch("/api/assets", { method: "POST", body: fd });
+    if (!r.ok) return setError(await errText(r));
+    const row = (await r.json()) as Asset;
+    loadImages();
+    set("logo_asset_id", row.id);
+  }
+
+  const logo = images.find((a) => a.id === draft.logo_asset_id);
+  // The preview shows each colour once it is a colour.
+  const shown = (v: string | null) => (v && HEX.test(normalHex(v)) ? normalHex(v) : undefined);
+  const [bg, ink, accent, secondary] = COLOR_ROLES.map((r) => shown(draft[r]));
+
+  return (
+    <main className="flex-1 overflow-y-auto">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8">
+        <div className="flex items-start justify-between gap-4 mb-6">
+          <div>
+            <h1 className="text-heading-1">Brand</h1>
+            <p className="text-body-sm text-muted mt-0.5 max-w-prose">
+              Set it once. New videos start in it, the AI uses it for every video it writes, and a colour outside it
+              shows up as an issue.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {brand?.set && (
+              <button onClick={() => setConfirmReset(true)} className={btnGhost}>
+                Reset
+              </button>
+            )}
+            <button onClick={save} disabled={!dirty || saving || !!badColor} className={btnPrimary}>
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+              Save
+            </button>
+          </div>
+        </div>
+
+        {(error || notice) && (
+          <p role="status" className={`mb-4 text-body-sm ${error ? "text-danger" : "text-muted"}`}>
+            {error ?? notice}
+          </p>
+        )}
+
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]">
+          <div className="space-y-6 min-w-0">
+            <section className={`${card} p-4 space-y-3`}>
+              <Zone>Colours</Zone>
+              {COLOR_ROLES.map((role) => (
+                <div key={role} className="grid grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[10rem_minmax(0,1fr)] items-center gap-x-3 gap-y-1">
+                  <div className="min-w-0">
+                    <div className="text-body-sm font-medium">{COLOR_LABEL[role].name}</div>
+                    <div className="text-fine text-faint truncate">{COLOR_LABEL[role].hint}</div>
+                  </div>
+                  <div className="flex items-center gap-2 col-span-2 sm:col-span-1">
+                    <input
+                      type="color"
+                      aria-label={`${COLOR_LABEL[role].name} colour`}
+                      className={`field w-9 shrink-0 p-1 ${draft[role] ? "" : "opacity-30"}`}
+                      value={draft[role] && HEX.test(normalHex(draft[role]!)) ? normalHex(draft[role]!) : "#000000"}
+                      onChange={(e) => set(role, e.target.value)}
+                    />
+                    <input
+                      className={`${inputCls} font-mono`}
+                      value={draft[role] ?? ""}
+                      placeholder="Not set"
+                      aria-invalid={draft[role] !== null && !HEX.test(normalHex(draft[role]!))}
+                      onChange={(e) => set(role, e.target.value.trim() ? e.target.value : null)}
+                      onBlur={(e) => e.target.value.trim() && set(role, normalHex(e.target.value))}
+                    />
+                    {draft[role] !== null && (
+                      <button onClick={() => set(role, null)} className={btnIcon} aria-label={`Clear ${COLOR_LABEL[role].name}`}>
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {badColor && <p className="text-fine text-danger">Write each colour as #rrggbb, for example #e4572e.</p>}
+              <p className="text-fine text-faint">
+                Greys, black and white always count as on brand, and so does any brand colour at an opacity.
+              </p>
+            </section>
+
+            <section className={`${card} p-4 space-y-3`}>
+              <Zone>Fonts</Zone>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {(["heading_font", "body_font"] as const).map((k) => (
+                  <Field key={k} label={k === "heading_font" ? "Headings" : "Body"}>
+                    <FontInput value={draft[k] ?? ""} onChange={(v) => set(k, v || null)} />
+                  </Field>
+                ))}
+              </div>
+              <p className="text-fine text-faint">
+                Any Google Fonts family, spelled as on fonts.google.com. The suggestions come with the renderer, so they
+                never need fetching.
+              </p>
+            </section>
+
+            <section className={`${card} p-4 space-y-3`}>
+              <div className="flex items-center gap-2">
+                <div className="flex-1">
+                  <Zone>Logo</Zone>
+                </div>
+                <button onClick={() => fileRef.current?.click()} className={btnSecondary}>
+                  <Upload className="w-4 h-4" /> Upload
+                </button>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/*"
+                  hidden
+                  onChange={(e) => {
+                    upload(e.target.files);
+                    e.target.value = "";
+                  }}
+                />
+              </div>
+              {images.length === 0 ? (
+                <p className="text-body-sm text-muted">Upload your logo. An SVG or a PNG with a transparent background works best.</p>
+              ) : (
+                <div role="radiogroup" aria-label="Logo" className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+                  <button
+                    role="radio"
+                    aria-checked={!draft.logo_asset_id}
+                    onClick={() => set("logo_asset_id", null)}
+                    className={`h-16 rounded-sm bg-surface-sunken text-fine text-muted ${!draft.logo_asset_id ? "ring-2 ring-ring" : "shadow-edge"}`}
+                  >
+                    None
+                  </button>
+                  {images.map((a) => (
+                    <button
+                      key={a.id}
+                      role="radio"
+                      aria-checked={draft.logo_asset_id === a.id}
+                      onClick={() => set("logo_asset_id", a.id)}
+                      title={a.name}
+                      className={`h-16 rounded-sm bg-surface-sunken p-1.5 ${draft.logo_asset_id === a.id ? "ring-2 ring-ring" : "shadow-edge"}`}
+                    >
+                      <img src={`/api/uploads/${a.key}`} alt={a.name} className="w-full h-full object-contain" />
+                    </button>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className={`${card} p-4 space-y-2`}>
+              <Field label="Notes for the AI">
+                <textarea
+                  className={`${inputCls} resize-y`}
+                  rows={4}
+                  maxLength={4000}
+                  value={draft.notes}
+                  placeholder="e.g. Calm and confident. No exclamation marks. Logo bottom right at the end."
+                  onChange={(e) => set("notes", e.target.value)}
+                />
+              </Field>
+            </section>
+          </div>
+
+          {/* A title card in the brand, as a new video will start. */}
+          <aside className="lg:sticky lg:top-6 self-start space-y-2">
+            <div className="text-label text-muted">Preview</div>
+            <div
+              className={`${card} aspect-video overflow-hidden grid place-content-center gap-1 text-center px-4`}
+              style={{ background: bg, fontFamily: draft.body_font ? `'${draft.body_font}', system-ui` : undefined }}
+            >
+              {logo && <img src={`/api/uploads/${logo.key}`} alt="" className="mx-auto h-8 w-auto max-w-[40%] object-contain mb-1" />}
+              <div
+                className="text-fine font-bold uppercase tracking-widest"
+                style={{ color: accent ?? secondary ?? ink, fontFamily: draft.heading_font ? `'${draft.heading_font}'` : undefined }}
+              >
+                Product launch
+              </div>
+              <div
+                className="text-heading-1 font-extrabold"
+                style={{ color: ink, fontFamily: draft.heading_font ? `'${draft.heading_font}'` : undefined }}
+              >
+                Your title here
+              </div>
+              <div className="text-body-sm" style={{ color: secondary ?? ink, opacity: secondary ? 1 : 0.7 }}>
+                A subtitle that fades in
+              </div>
+            </div>
+          </aside>
+        </div>
+      </div>
+
+      {confirmReset && (
+        <ConfirmDialog
+          title="Reset the brand?"
+          body="New videos start in the default look again. Videos you already made keep their colours."
+          confirmLabel="Reset"
+          onConfirm={reset}
+          onClose={() => setConfirmReset(false)}
+        />
+      )}
+    </main>
+  );
+}
+
+/** A font name: typed (any Google Fonts family), or picked from the ones the renderer ships with. */
+function FontInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="flex items-center gap-1">
+      <input
+        className={inputCls}
+        value={value}
+        placeholder="Inter"
+        style={value ? { fontFamily: `'${value}', system-ui` } : undefined}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button className={btnIcon} aria-label="Pick a font">
+            <ChevronDown className="w-4 h-4" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="end">
+          <Command label="Fonts">
+            <CommandGroup heading="Ready in the renderer">
+              {BUNDLED_FONTS.map((f) => (
+                <CommandItem
+                  key={f}
+                  value={f}
+                  onSelect={() => {
+                    onChange(f);
+                    setOpen(false);
+                  }}
+                >
+                  <span style={{ fontFamily: `'${f}', system-ui` }}>{f}</span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </Command>
+        </PopoverContent>
+      </Popover>
     </div>
   );
 }

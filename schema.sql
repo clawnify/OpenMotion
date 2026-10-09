@@ -99,3 +99,20 @@ CREATE TABLE IF NOT EXISTS presenter_jobs (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- The brand: one row (id 1) or none. Colours are #rrggbb, fonts are Google
+-- Fonts family names, the logo is a media-library asset. Read by the agent
+-- before it writes a video (GET /api/brand), used by a new video's starter,
+-- and checked by the lint (src/shared/brand.ts).
+CREATE TABLE IF NOT EXISTS brand (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  background TEXT,
+  text TEXT,
+  accent TEXT,
+  secondary TEXT,
+  heading_font TEXT,
+  body_font TEXT,
+  logo_asset_id TEXT,
+  notes TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);

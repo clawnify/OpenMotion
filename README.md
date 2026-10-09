@@ -15,12 +15,13 @@ Agents are already good at writing motion graphics as code. Where it gets hard i
 - **Describe a video**: inside Clawnify, write what you want (what it is for, how long, vertical or landscape) and your AI agent builds it. **Ask AI** in the editor changes the video on screen, and the preview updates in place.
 - **Timeline editor**: drag a clip to move it or onto another track, drag its edges to trim it, zoom in to the frame, and undo anything (Cmd/Ctrl-Z). Clips snap to the playhead and to each other, and every change is written back to the composition's timing attributes.
 - **Catches what would render wrong**: every save runs HyperFrames' own linter, so a title a GSAP tween knocks off centre or a timeline that never plays shows up as an issue with its fix before you export, and **Ask AI to fix** hands the list to your agent.
+- **Your brand, set once**: save your colours (background, text, accent, secondary), a heading and a body font (any Google Fonts family) and your logo on the Brand page. New videos start in it, your agent writes every video in it, and a colour outside it shows up as an issue.
 - **Live preview**: one clock keeps the preview and the timeline in sync.
 - **Bring your own media**: upload logos, photos, product clips and sound in the Media sidebar and click one to put it in the video at the playhead, or reference it by path (`assets/your-logo.png`) in the HTML.
 - **Export when you need a file**: the preview is the video, so nothing renders until you export. Export makes a real MP4 in the background, downloads it when it is ready and keeps it in your media library. A long video or a closed tab loses nothing: reopen the video and the export picks up where it was.
 - **Voiceovers and presenters**: turn a script into speech in one of your ElevenLabs voices, and a photo plus a voice clip into a video of that person speaking (fal.ai). Both land in your media library, run on your own accounts, and need the person's consent to animate them.
 - **Music and sound effects**: a music bed made to the video's length and sound effects for its transitions and clicks, from a prompt, on your own ElevenLabs account. Every sound is measured (loudness in LUFS, and where it hits hardest), so an agent sets levels and timing from numbers.
-- **Agent-ready**: a REST API (`/api/compositions`, `/api/assets`, `/api/renders`, `/api/speech`, `/api/music`, `/api/sound-effects`, `/api/presenters`) and an `agent.md`, so an agent can author and render videos on its own.
+- **Agent-ready**: a REST API (`/api/compositions`, `/api/brand`, `/api/assets`, `/api/renders`, `/api/speech`, `/api/music`, `/api/sound-effects`, `/api/presenters`) and an `agent.md`, so an agent can author and render videos on its own.
 
 ## How a composition works
 
@@ -68,11 +69,12 @@ Voiceovers, music, sound effects and presenters use your own ElevenLabs and fal.
 
 ```
 src/
-  client/app.tsx     # UI: gallery, composition editor, timeline, media, renders
+  client/app.tsx     # UI: gallery, brand, composition editor, timeline, media, renders
   client/ui.tsx      # shared control recipes (buttons, dialog, empty state)
   client/starter.ts  # the starter composition (video content, not app chrome)
   client/styles.css  # design tokens: palette, type scale, elevation
-  server/            # Hono API: compositions (linted), assets, renders
+  server/            # Hono API: compositions (linted), brand, assets, renders
+  shared/brand.ts    # the brand: colour check, font names (worker, browser, tests)
 agent.md             # how an AI agent authors and renders videos
 ```
 
