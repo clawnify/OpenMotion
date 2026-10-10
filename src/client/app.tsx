@@ -1591,9 +1591,13 @@ function MediaSidebar({ changes, onAdd }: { changes: number; onAdd: (a: Asset) =
     try {
       for (const f of Array.from(files)) {
         const probe = probeFile(f);
-        const fd = new FormData();
-        fd.append("file", f);
-        const res = await fetch("/api/assets", { method: "POST", body: fd });
+        // The file itself is the body, so the server streams it to storage
+        // instead of holding it: a big clip uploads like a small one.
+        const res = await fetch(`/api/assets?name=${encodeURIComponent(f.name)}`, {
+          method: "POST",
+          headers: { "Content-Type": f.type || "application/octet-stream" },
+          body: f,
+        });
         if (!res.ok) continue;
         const row = (await res.json()) as Asset;
         // The length lands after the upload, so a slow probe never holds it up.

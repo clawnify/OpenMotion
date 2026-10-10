@@ -471,35 +471,87 @@ app.get("/api/assets", async (c) => {
   return c.json(rows);
 });
 
-app.post("/api/assets", async (c) => {
-  const body = await c.req.parseBody();
-  const file = body["file"];
-  if (!file || typeof file === "string") return c.json({ error: "No file provided" }, 400);
+// A multipart upload is parsed whole in memory, the file read again into a
+// buffer: about twice its size, in an isolate that has 128 MB. Past this it is
+// refused with a pointer to the raw upload below, which streams.
+const MULTIPART_MAX_BYTES = 30 * 1024 * 1024;
 
-  // Unique R2 key from the original name; suffix on collision.
-  let key = makeKey(file.name || "file");
-  const clash = await get<{ id: string }>("SELECT id FROM assets WHERE key = ?", [key]);
-  if (clash) {
-    const dot = key.lastIndexOf(".");
-    const suffix = lower8();
-    key = dot > 0 ? `${key.slice(0, dot)}-${suffix}${key.slice(dot)}` : `${key}-${suffix}`;
+// A sound is measured from its first MEASURE_BYTES only: the meter reads the
+// first 60 s (audio-measure MAX_SECONDS), which is 11.5 MB of 48 kHz 16-bit
+// stereo WAV and far less as MP3, and a long recording must not be held whole.
+const MEASURE_BYTES = 24 * 1024 * 1024;
+
+async function measureStored(key: string, size: number) {
+  const head = await getUploadRange(key, 0, size > 0 ? Math.min(size, MEASURE_BYTES) : MEASURE_BYTES);
+  if (!head) return null;
+  return measureAudio(new Uint8Array(await new Response(head.data).arrayBuffer()));
+}
+
+/** A free R2 key from an original file name: suffixed when it is taken. */
+async function freeKey(filename: string): Promise<string> {
+  const key = makeKey(filename);
+  if (!(await get<{ id: string }>("SELECT id FROM assets WHERE key = ?", [key]))) return key;
+  const dot = key.lastIndexOf(".");
+  const suffix = lower8();
+  return dot > 0 ? `${key.slice(0, dot)}-${suffix}${key.slice(dot)}` : `${key}-${suffix}`;
+}
+
+// Upload to the media library, two ways:
+// - raw: the file is the body, `Content-Type` its type, `?name=` its file
+//   name, `?duration=` its seconds. Streamed straight to storage, so any size
+//   the platform passes. What the editor sends.
+// - multipart: the file in the field `file` (and `duration`), what forms and
+//   agents send. Up to MULTIPART_MAX_BYTES.
+app.post("/api/assets", async (c) => {
+  const type = c.req.header("Content-Type") || "";
+  const length = Number(c.req.header("Content-Length"));
+  let name: string;
+  let contentType: string;
+  let durRaw: unknown;
+  let body: ReadableStream | ArrayBuffer;
+
+  if (/^multipart\/form-data/i.test(type)) {
+    if (length > MULTIPART_MAX_BYTES) {
+      return c.json(
+        {
+          error: `A form upload can be at most ${MULTIPART_MAX_BYTES / 1024 / 1024} MB. Send the file itself as the body instead, with its Content-Type and ?name=<file name>.`,
+        },
+        413,
+      );
+    }
+    const form = await c.req.parseBody();
+    const file = form["file"];
+    if (!file || typeof file === "string") return c.json({ error: "No file provided" }, 400);
+    name = file.name || "file";
+    contentType = file.type || "application/octet-stream";
+    durRaw = form["duration"];
+    body = await file.arrayBuffer();
+  } else {
+    name = c.req.query("name") || "";
+    if (!name) return c.json({ error: "Name the file: ?name=<file name>" }, 400);
+    // Storage takes a stream only when its length is known up front.
+    if (!(length > 0)) return c.json({ error: "Send the file with a Content-Length" }, 411);
+    const raw = c.req.raw.body;
+    if (!raw) return c.json({ error: "No file provided" }, 400);
+    contentType = type.split(";")[0].trim() || "application/octet-stream";
+    durRaw = c.req.query("duration");
+    body = raw;
   }
 
-  const data = await file.arrayBuffer();
-  const contentType = file.type || "application/octet-stream";
-  await putUpload(key, data, contentType);
+  const key = await freeKey(name);
+  const size = await putUpload(key, body, contentType);
 
   // Client-probed media length (seconds) — see schema note on assets.duration.
-  const durRaw = Number(body["duration"]);
-  const duration = Number.isFinite(durRaw) && durRaw > 0 ? durRaw : null;
+  const dur = Number(durRaw);
+  const duration = Number.isFinite(dur) && dur > 0 ? dur : null;
 
   // A sound is measured now, so an agent mixing it has its numbers at once.
-  const measure = contentType.startsWith("audio/") ? await measureAudio(new Uint8Array(data)) : undefined;
+  const measure = contentType.startsWith("audio/") ? await measureStored(key, size) : undefined;
 
   const res = await run(
     `INSERT INTO assets (key, name, content_type, size, duration, loudness, peak_at, measured_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ${measure === undefined ? "NULL" : "datetime('now')"})`,
-    [key, file.name || key, contentType, data.byteLength, duration, measure?.loudness ?? null, measure?.peak_at ?? null],
+    [key, name, contentType, size, duration, measure?.loudness ?? null, measure?.peak_at ?? null],
   );
   const row = await get<Asset>("SELECT * FROM assets WHERE rowid = ?", [res.lastInsertRowid]);
   return c.json(row, 201);
@@ -511,8 +563,7 @@ app.get("/api/assets/:id", async (c) => {
   const row = await get<Asset & { measured_at: string | null }>("SELECT * FROM assets WHERE id = ?", [c.req.param("id")]);
   if (!row) return c.json({ error: "Not found" }, 404);
   if (row.measured_at || !row.content_type.startsWith("audio/")) return c.json(row);
-  const bytes = await getUploadBytes(row.key);
-  const measure = bytes ? await measureAudio(new Uint8Array(bytes)) : null;
+  const measure = await measureStored(row.key, row.size);
   await run("UPDATE assets SET loudness = ?, peak_at = ?, measured_at = datetime('now') WHERE id = ?", [
     measure?.loudness ?? null,
     measure?.peak_at ?? null,

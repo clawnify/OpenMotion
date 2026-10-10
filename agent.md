@@ -123,9 +123,12 @@ duration }]`. A sound also carries `loudness` and `peak_at` (see Music and sound
 effects).
 Use the exact `key` in `assets/<key>`. You can upload too: a multipart
 `POST /api/assets` with the file in the field `file` (and `duration` in seconds
-for a video or sound, when you know it). The key is made from the file name,
-lowercased and de-duplicated, so reference the `key` the response returns, not
-the name you sent.
+for a video or sound, when you know it), up to 30 MB. A bigger file goes as the
+body itself, which the app streams to storage: `POST /api/assets?name=clip.mp4`
+(and `&duration=` when you know it) with the file's `Content-Type`, e.g.
+`curl --data-binary @clip.mp4 -H "Content-Type: video/mp4"`. The key is made
+from the file name, lowercased and de-duplicated, so reference the `key` the
+response returns, not the name you sent.
 
 When the user attaches an image in the dashboard chat ("put my face at the
 bottom"), upload it with `call_app_api`'s `files`; the bytes go straight to the
@@ -453,6 +456,7 @@ captions only to a demo you will not rebuild.
 | PUT  | `/api/compositions/{id}` | Update any of `name/description/html/fps` → the row with `lint` |
 | DELETE | `/api/compositions/{id}` | Delete |
 | GET  | `/api/assets` | List the media library (a sound with its `loudness` and `peak_at`) |
+| POST | `/api/assets` | Upload: multipart field `file` (30 MB), or the file as the body with `?name=` |
 | GET  | `/api/assets/{id}` | One asset; measures an older sound on its first read |
 | GET  | `/api/voices` | The user's ElevenLabs voices: `?search=`, `?category=`, `?page_token=` |
 | POST | `/api/speech` | Script to speech `{ voice_id, script }` → an MP3 asset |
