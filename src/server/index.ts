@@ -487,10 +487,12 @@ async function measureStored(key: string, size: number) {
   return measureAudio(new Uint8Array(await new Response(head.data).arrayBuffer()));
 }
 
-/** A free R2 key from an original file name: suffixed when it is taken. */
-async function freeKey(filename: string): Promise<string> {
+/** An R2 key from an original file name, with a random suffix. Checking that a
+ *  name is free and then writing it would race: a streamed upload runs for as
+ *  long as the transfer, so two uploads of one name would both find it free and
+ *  the second would overwrite the first's file. */
+function uploadKey(filename: string): string {
   const key = makeKey(filename);
-  if (!(await get<{ id: string }>("SELECT id FROM assets WHERE key = ?", [key]))) return key;
   const dot = key.lastIndexOf(".");
   const suffix = lower8();
   return dot > 0 ? `${key.slice(0, dot)}-${suffix}${key.slice(dot)}` : `${key}-${suffix}`;
@@ -538,7 +540,7 @@ app.post("/api/assets", async (c) => {
     body = raw;
   }
 
-  const key = await freeKey(name);
+  const key = uploadKey(name);
   const size = await putUpload(key, body, contentType);
 
   // Client-probed media length (seconds) — see schema note on assets.duration.

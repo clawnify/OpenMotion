@@ -127,8 +127,8 @@ for a video or sound, when you know it), up to 30 MB. A bigger file goes as the
 body itself, which the app streams to storage: `POST /api/assets?name=clip.mp4`
 (and `&duration=` when you know it) with the file's `Content-Type`, e.g.
 `curl --data-binary @clip.mp4 -H "Content-Type: video/mp4"`. The key is made
-from the file name, lowercased and de-duplicated, so reference the `key` the
-response returns, not the name you sent.
+from the file name, lowercased, plus a short random suffix (`clip-3fa9c2d1.mp4`),
+so reference the `key` the response returns, not the name you sent.
 
 When the user attaches an image in the dashboard chat ("put my face at the
 bottom"), upload it with `call_app_api`'s `files`; the bytes go straight to the
