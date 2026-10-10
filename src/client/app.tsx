@@ -1574,6 +1574,7 @@ function MediaSidebar({ changes, onAdd }: { changes: number; onAdd: (a: Asset) =
   const [assets, setAssets] = useState<Asset[] | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadErr, setUploadErr] = useState("");
   const [dragging, setDragging] = useState(false);
   const [confirmDel, setConfirmDel] = useState<Asset | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -1588,21 +1589,36 @@ function MediaSidebar({ changes, onAdd }: { changes: number; onAdd: (a: Asset) =
   async function upload(files: FileList | null) {
     if (!files?.length) return;
     setUploading(true);
+    setUploadErr("");
+    const failed: string[] = [];
     try {
       for (const f of Array.from(files)) {
         const probe = probeFile(f);
-        const fd = new FormData();
-        fd.append("file", f);
-        const res = await fetch("/api/assets", { method: "POST", body: fd });
-        if (!res.ok) continue;
+        // The file itself is the body, so the server streams it to storage
+        // instead of holding it: a big clip uploads like a small one.
+        const res = await fetch(`/api/assets?name=${encodeURIComponent(f.name)}`, {
+          method: "POST",
+          headers: { "Content-Type": f.type || "application/octet-stream" },
+          body: f,
+        });
+        if (!res.ok) {
+          // A file past the platform's request limit is turned away before it
+          // reaches the app, as a 413 with no JSON.
+          const msg = await res.json().then((b) => (b as { error?: string }).error).catch(() => null);
+          failed.push(res.status === 413 && !msg ? `${f.name} is too big to upload here. Shorten or compress it.` : `${f.name}: ${msg || `upload failed (${res.status})`}`);
+          continue;
+        }
         const row = (await res.json()) as Asset;
         // The length lands after the upload, so a slow probe never holds it up.
         const duration = await probe;
         if (duration) await api.send("PATCH", `/api/assets/${row.id}`, { duration });
       }
       await load();
+    } catch (e) {
+      failed.push(String((e as Error).message || e));
     } finally {
       setUploading(false);
+      setUploadErr(failed.join(" "));
     }
   }
 
@@ -1649,6 +1665,15 @@ function MediaSidebar({ changes, onAdd }: { changes: number; onAdd: (a: Asset) =
         upload(e.dataTransfer.files);
       }}
     >
+      {uploadErr && (
+        <div role="alert" className="mx-4 mt-4 flex items-start gap-2 rounded-sm bg-danger-tint px-3 py-2 text-body-sm text-danger">
+          <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+          <span className="flex-1 min-w-0 [overflow-wrap:anywhere]">{uploadErr}</span>
+          <button onClick={() => setUploadErr("")} className={btnIcon} aria-label="Dismiss">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
       <div className="px-4 pt-4 pb-2 shrink-0 flex items-center gap-2">
         <h2 className="flex-1 text-label text-muted">Media</h2>
         <button onClick={() => fileRef.current?.click()} disabled={uploading} className={btnSecondary}>

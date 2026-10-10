@@ -4,12 +4,15 @@ export function initUploads(bucket: R2Bucket) {
   _bucket = bucket;
 }
 
+/** Store a file; resolves to its size in bytes as stored. A stream must have a
+ *  known length: a request body sent with a Content-Length, or a FixedLengthStream. */
 export async function putUpload(
   key: string,
   data: ArrayBuffer | Uint8Array | ReadableStream,
   contentType: string,
-): Promise<void> {
-  await _bucket.put(key, data, { httpMetadata: { contentType } });
+): Promise<number> {
+  const obj = await _bucket.put(key, data, { httpMetadata: { contentType } });
+  return obj?.size ?? 0;
 }
 
 export async function getUpload(
