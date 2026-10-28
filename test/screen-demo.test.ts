@@ -1,7 +1,8 @@
 // Run: pnpm test (Node 22+, no dependencies).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { screenDemoHtml, screenDemoProblems, typingWindow, defaultSeconds, demoSpecOf, fitSeconds, replaceDemoSteps, demoStepTimes, withDemoSpec, applyLayout, demoStepsOf, motionStart, type ScreenDemoOptions } from "../src/shared/screen-demo.ts";
+import { CURSORKIT, screenDemoHtml, screenDemoProblems, typingWindow, defaultSeconds, demoSpecOf, fitSeconds, replaceDemoSteps, demoStepTimes, withDemoSpec, applyLayout, demoStepsOf, motionStart, type ScreenDemoOptions } from "../src/shared/screen-demo.ts";
+import { readFileSync } from "node:fs";
 import { compositionLength } from "../src/shared/length.ts";
 
 const demo: ScreenDemoOptions = {
@@ -127,6 +128,23 @@ test("one action per step, each with its own minimum length, and typing needs st
       "steps[2].connect.to: a box {x,y,w,h} on the 1600x900 page",
     ],
   );
+});
+
+test("the cursor is cursorkit's, its hotspot on the point that clicks, in the shape for each action", () => {
+  const html = screenDemoHtml(demo);
+  // The arrow's hotspot is 4,4 at size 1, 5,5 at the demo's 1.25.
+  assert.match(html, new RegExp(`<img data-shape="arrow" src="https://cdn\\.jsdelivr\\.net/npm/@pallaoro/cursorkit@${CURSORKIT.replace(/\./g, "\\.")}/svg/light/arrow\\.svg" alt="" style="position:absolute;left:-5px;top:-5px;width:28\\.75px;height:36\\.25px;max-width:none">`));
+  for (const shape of ["pointer", "grab", "grabbing", "text", "crosshair"]) {
+    assert.match(html, new RegExp(`<img data-shape="${shape}" [^>]*;opacity:0">`), `${shape} starts hidden`);
+  }
+  assert.match(html, /reach\(st\.type, t \+ 0\.95, "text"\)/);
+  assert.match(html, /reach\(st\.dragFrom, t \+ 0\.95, "grab"\)/);
+  assert.match(html, /reach\(st\.linkFrom, t \+ 0\.95, "crosshair"\)/);
+});
+
+test("the cursor images load the cursorkit version package.json pins", () => {
+  const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  assert.equal(pkg.dependencies["@pallaoro/cursorkit"], CURSORKIT);
 });
 
 test("the cursor's randomness is seeded: no Math.random in the composition", () => {
@@ -295,7 +313,7 @@ test("a click's motion plays from the press, over every still, muted, for its ow
   assert.match(html, /<video id="step2-motion" src="assets\/b-motion.mp4" class="clip demo-motion" data-start="7.2" data-duration="0.4" data-track-index="1" muted playsinline/);
   assert.ok(html.indexOf('id="step2-motion"') > html.indexOf('id="step3"'), "after the next still, so it plays on top of it");
   assert.ok(html.indexOf('id="step2-motion"') < html.indexOf("<!-- /demo-steps -->"));
-  assert.match(html, /var at = end - 0\.3, r = reach\(st\.click, at\)/);
+  assert.match(html, /var at = end - 0\.3, r = reach\(st\.click, at, "pointer"\)/);
   assert.equal(compositionLength(html), 10);
 });
 
