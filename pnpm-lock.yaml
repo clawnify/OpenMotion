@@ -23,6 +23,9 @@ importers:
       '@hyperframes/lint':
         specifier: ~0.8.97
         version: 0.8.97
+      '@pallaoro/cursorkit':
+        specifier: 0.1.0
+        version: 0.1.0
       '@phosphor-icons/react':
         specifier: ^2.1.10
         version: 2.1.10(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -795,6 +798,11 @@ packages:
     peerDependenciesMeta:
       '@cfworker/json-schema':
         optional: true
+
+  '@pallaoro/cursorkit@0.1.0':
+    resolution: {integrity: sha512-X4iQjwah47tVTqeT5QWtsekbJoATEZZFomQ9czDVfFmYIvjztEXkDoDaQY1iVlvGJv/RYwWZ1ajy4GPO4pCB/A==}
+    engines: {node: '>=18'}
+    hasBin: true
 
   '@phosphor-icons/react@2.1.10':
     resolution: {integrity: sha512-vt8Tvq8GLjheAZZYa+YG/pW7HDbov8El/MANW8pOAz4eGxrwhnbfrQZq0Cp4q8zBEu8NIhHdnr+r8thnfRSNYA==}
@@ -3054,6 +3062,8 @@ snapshots:
       zod-to-json-schema: 3.25.2(zod@3.25.76)
     transitivePeerDependencies:
       - supports-color
+
+  '@pallaoro/cursorkit@0.1.0': {}
 
   '@phosphor-icons/react@2.1.10(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
     dependencies:

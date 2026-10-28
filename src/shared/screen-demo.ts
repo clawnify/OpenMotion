@@ -1,3 +1,5 @@
+import { cursor } from "@pallaoro/cursorkit";
+
 // A product demo in the style of a polished screen recording, built from one
 // still per state of a real app: a cursor glides to a control and clicks it,
 // drags an item, draws a connection or types, the page changes, and the camera
@@ -107,6 +109,21 @@ export const MIN_STEP = { click: 2, drag: 2.2, connect: 2.2, type: 2.5 } as cons
 const ACTIONS = ["click", "drag", "connect", "type"] as const;
 /** The kit presses a step's click this long before the step ends. */
 export const PRESS_BEFORE_END = 0.3;
+
+// The cursor's shapes, from cursorkit: each placed so its hotspot, the pixel
+// that clicks, sits on the cursor's point, at 1.25x an OS cursor in page
+// pixels. The kit shows the one the action would show: the hand over a
+// click, the open then closed hand on a drag, the beam on a field. The images
+// load from the CDN, as GSAP does, so a demo's HTML stays small for whoever
+// reads it. CURSORKIT is the exact version package.json pins.
+export const CURSORKIT = "0.1.0";
+const CURSOR_SCALE = 1.25;
+const CURSOR_SHAPES = ["arrow", "pointer", "grab", "grabbing", "text", "crosshair"] as const;
+const CURSOR_HTML = CURSOR_SHAPES.map((name) => {
+  const c = cursor(name);
+  const px = (v: number) => Math.round(v * CURSOR_SCALE * 100) / 100;
+  return `        <img data-shape="${name}" src="https://cdn.jsdelivr.net/npm/@pallaoro/cursorkit@${CURSORKIT}/svg/light/${name}.svg" alt="" style="position:absolute;left:${-px(c.hotspot.x)}px;top:${-px(c.hotspot.y)}px;width:${px(c.width)}px;height:${px(c.height)}px;max-width:none${name === "arrow" ? "" : ";opacity:0"}">`;
+}).join("\n");
 
 /** When a click step's motion video starts: at the press. */
 export function motionStart(stepStart: number, stepSeconds: number): number {
@@ -253,9 +270,9 @@ ${open}  <div id="cam" style="position:absolute;left:0;top:0;width:100%;height:1
          style="position:absolute;left:0;top:0;width:${pw}px;height:${ph}px;transform-origin:0 0">
 ${steps.html}
       <div id="ripple" style="position:absolute;left:0;top:0;width:56px;height:56px;margin:-28px 0 0 -28px;border-radius:50%;background:rgba(${accent},.35);border:2px solid rgba(${accent},.8);opacity:0"></div>
-      <svg id="cursor" width="30" height="30" viewBox="0 0 24 24" style="position:absolute;left:0;top:0;overflow:visible;filter:drop-shadow(0 2px 3px rgba(0,0,0,.35))">
-        <path d="M3 2l15 9.5-6.6 1.3L8 19.6z" fill="#111" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/>
-      </svg>
+      <div id="cursor" style="position:absolute;left:0;top:0;width:0;height:0">
+${CURSOR_HTML}
+      </div>
     </div>
     </div>
   </div>
@@ -594,13 +611,17 @@ const KIT = `    // Screen-demo kit: builds the camera, cursor and actions from 
         return at + pts.reduce(function (a, p) { return a + p.dt; }, 0);
       }
       // Arrive on a target so the press lands at "press": travel, settle, dwell.
-      // Returns when the travel starts (the camera may want to lead it).
-      function reach(b, press) {
+      // The cursor travels as the arrow and turns into "over" (its shape over
+      // that target) as it arrives. Returns when the travel starts (the camera
+      // may want to lead it).
+      function reach(b, press, over) {
         var to = { x: b.x + b.w / 2 + clamp(rand(-0.15, 0.15) * b.w, -3, 3), y: b.y + b.h / 2 + clamp(rand(-0.15, 0.15) * b.h, -3, 3) };
         var dist = Math.sqrt(Math.pow(to.x - cur.x, 2) + Math.pow(to.y - cur.y, 2));
         var dwell = rand(0.06, 0.18), settle = rand(0.03, 0.06), dur = moveTime(dist, b.w);
         var start = press - dwell - settle - dur;
+        shape("arrow", start);
         var arrive = move(path(to, b.w, dur), start);
+        shape(over, arrive);
         tl.to("#cursor", { x: to.x + rand(-1.2, 1.2), y: to.y + rand(-1.2, 1.2), duration: settle, ease: "none" }, arrive);
         tl.to("#cursor", { x: to.x, y: to.y, duration: 0.02, ease: "none" }, arrive + settle);
         return { start: start, point: to };
@@ -609,6 +630,9 @@ const KIT = `    // Screen-demo kit: builds the camera, cursor and actions from 
       var ripple = function (p, at) { tl.fromTo("#ripple", { x: p.x, y: p.y, scale: 0.2, opacity: 1 }, { scale: 1.5, opacity: 0, duration: 0.5, ease: "circ.out" }, at); };
       // An element the kit draws over the page (a drag ghost, a connection).
       var layer = function (css) { var el = document.createElement("div"); el.style.cssText = "position:absolute;left:0;top:0;opacity:0;pointer-events:none;" + css; win.insertBefore(el, document.getElementById("ripple")); return el; };
+      // Show one of the cursor's shapes from time "at".
+      var shapes = [].slice.call(root.querySelectorAll("#cursor [data-shape]"));
+      var shape = function (name, at) { shapes.forEach(function (el) { tl.set(el, { opacity: el.dataset.shape === name ? 1 : 0 }, at); }); };
 
       gsap.set("#cam", cam(1, PW / 2, PH / 2));
       gsap.set("#cursor", { x: cur.x, y: cur.y });
@@ -627,16 +651,16 @@ const KIT = `    // Screen-demo kit: builds the camera, cursor and actions from 
         else if (pair) camTo(t + 0.2, 1, "power3.inOut", fitWide(pair), mid(pair));
         else camTo(t + 0.25, 0.9, "power3.inOut", 1, { x: PW / 2, y: PH / 2 });
         if (st.click) {
-          var at = end - ${PRESS_BEFORE_END}, r = reach(st.click, at);
+          var at = end - ${PRESS_BEFORE_END}, r = reach(st.click, at, "pointer");
           camTo(Math.max(t + 1.4, r.start - 0.2), Math.max(0.4, at - Math.max(t + 1.4, r.start - 0.2)), "sine.inOut", 1.35, mid(st.click));
           press(at); ripple(r.point, at + 0.03);
         }
         if (st.type) {
-          var rt = reach(st.type, t + 0.95);
+          var rt = reach(st.type, t + 0.95, "text");
           press(t + 0.95); ripple(rt.point, t + 0.98);
         }
         if (st.dragFrom && st.dragTo) {
-          var g = reach(st.dragFrom, t + 0.95), grab = t + 0.95, drop = end - 0.35, fd = st.dragFrom;
+          var g = reach(st.dragFrom, t + 0.95, "grab"), grab = t + 0.95, drop = end - 0.35, fd = st.dragFrom;
           // The ghost is the dragged item cut out of this step's own still,
           // held where it was grabbed and carried along the same path.
           var ghost = layer("width:" + fd.w + "px;height:" + fd.h + "px;border-radius:8px;box-shadow:0 12px 30px rgba(0,0,0,.18);" +
@@ -644,15 +668,17 @@ const KIT = `    // Screen-demo kit: builds the camera, cursor and actions from 
           var ox = fd.x - g.point.x, oy = fd.y - g.point.y, b = mid(st.dragTo);
           gsap.set(ghost, { x: fd.x, y: fd.y });
           tl.to("#cursor", { scale: 0.85, duration: 0.08, ease: "power1.in" }, grab);
+          shape("grabbing", grab);
           tl.to(ghost, { opacity: 0.9, duration: 0.15 }, grab);
           var dist = Math.sqrt(Math.pow(b.x - cur.x, 2) + Math.pow(b.y - cur.y, 2));
           move(path(b, st.dragTo.w + 40, Math.max(0.6, Math.min(drop - grab - 0.15, moveTime(dist, 80) * 1.3))), grab + 0.12,
                [{ el: ghost, at: function (p) { return { x: p.x + ox, y: p.y + oy }; } }]);
           tl.to("#cursor", { scale: 1, duration: 0.08 }, drop);
+          shape("grab", drop);
           tl.to(ghost, { opacity: 0, duration: 0.12 }, drop);
         }
         if (st.linkFrom && st.linkTo) {
-          var h = reach(st.linkFrom, t + 0.95), hold = t + 0.95, letGo = end - 0.35, s0 = h.point, s1 = mid(st.linkTo);
+          var h = reach(st.linkFrom, t + 0.95, "crosshair"), hold = t + 0.95, letGo = end - 0.35, s0 = h.point, s1 = mid(st.linkTo);
           // A dashed line from the handle to wherever the cursor is.
           var line = layer("width:1px;height:0;border-top:2px dashed rgb(" + accent + ");transform-origin:0 50%");
           gsap.set(line, { x: s0.x, y: s0.y - 1, scaleX: 0 });
