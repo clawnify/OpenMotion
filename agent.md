@@ -423,6 +423,14 @@ viewer at (`focus`), and the one action that reaches the next state:
 
 The last step usually has no action: 2 to 3 s to look at the result.
 
+The camera zooms in only where the cursor is about to act: a viewer reads a
+zoom as "a click is coming here". So a `focus` that holds the step's action (a
+row whose button is clicked) zooms to it, and a `focus` with no action inside it
+(a result to look at, or a step that then clicks somewhere else) is a spotlight
+instead: the page dims around it and a ring marks it, the camera stays wide, and
+the spotlight goes when the cursor sets off for the action. To end on a zoom,
+end on an action, such as opening the record the video is about.
+
 **Make it from the link, in this app.** You need no browser of your own: the
 app walks the page in a real browser on Clawnify's capture service.
 

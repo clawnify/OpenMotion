@@ -633,6 +633,17 @@ const KIT = `    // Screen-demo kit: builds the camera, cursor and actions from 
       // Show one of the cursor's shapes from time "at".
       var shapes = [].slice.call(root.querySelectorAll("#cursor [data-shape]"));
       var shape = function (name, at) { shapes.forEach(function (el) { tl.set(el, { opacity: el.dataset.shape === name ? 1 : 0 }, at); }); };
+      // A zoom promises an action where it lands, so a focus with no action
+      // inside it is shown as a spotlight instead: the rest of the page dims
+      // and a ring marks the box, until the cursor sets off elsewhere.
+      var inside = function (b, f) { var m = mid(b); return m.x >= f.x && m.x <= f.x + f.w && m.y >= f.y && m.y <= f.y + f.h; };
+      var spot = function (b, from, to) {
+        var pad = 10, el = layer("width:" + (b.w + 2 * pad) + "px;height:" + (b.h + 2 * pad) + "px;border-radius:12px;" +
+          "box-shadow:0 0 0 3px rgba(" + accent + ",.9),0 0 0 9999px rgba(20,20,20,.38)");
+        gsap.set(el, { x: b.x - pad, y: b.y - pad });
+        tl.to(el, { opacity: 1, duration: 0.35, ease: "sine.out" }, from);
+        tl.to(el, { opacity: 0, duration: 0.25, ease: "sine.in" }, Math.max(from + 0.4, to - 0.25));
+      };
 
       gsap.set("#cam", cam(1, PW / 2, PH / 2));
       gsap.set("#cursor", { x: cur.x, y: cur.y });
@@ -646,17 +657,21 @@ const KIT = `    // Screen-demo kit: builds the camera, cursor and actions from 
       steps.forEach(function (st) {
         var t = st.start, end = st.end;
         var pair = st.dragFrom && st.dragTo ? span(st.dragFrom, st.dragTo) : st.linkFrom && st.linkTo ? span(st.linkFrom, st.linkTo) : null;
-        var f = st.focus || st.type;
+        var act = st.click || st.type || st.dragFrom || st.linkFrom;
+        var look = st.focus && !(act && inside(act, st.focus)) ? st.focus : null, leave = end;
+        var f = look ? null : st.focus || st.type;
         if (f) camTo(t + 0.3, 1.1, "expo.inOut", fit(f), mid(f));
         else if (pair) camTo(t + 0.2, 1, "power3.inOut", fitWide(pair), mid(pair));
         else camTo(t + 0.25, 0.9, "power3.inOut", 1, { x: PW / 2, y: PH / 2 });
         if (st.click) {
           var at = end - ${PRESS_BEFORE_END}, r = reach(st.click, at, "pointer");
+          leave = r.start;
           camTo(Math.max(t + 1.4, r.start - 0.2), Math.max(0.4, at - Math.max(t + 1.4, r.start - 0.2)), "sine.inOut", 1.35, mid(st.click));
           press(at); ripple(r.point, at + 0.03);
         }
         if (st.type) {
           var rt = reach(st.type, t + 0.95, "text");
+          leave = rt.start;
           press(t + 0.95); ripple(rt.point, t + 0.98);
         }
         if (st.dragFrom && st.dragTo) {
@@ -666,6 +681,7 @@ const KIT = `    // Screen-demo kit: builds the camera, cursor and actions from 
           var ghost = layer("width:" + fd.w + "px;height:" + fd.h + "px;border-radius:8px;box-shadow:0 12px 30px rgba(0,0,0,.18);" +
             "background:url(" + JSON.stringify(st.el.getAttribute("src")) + ") no-repeat -" + fd.x + "px -" + fd.y + "px/" + PW + "px " + PH + "px");
           var ox = fd.x - g.point.x, oy = fd.y - g.point.y, b = mid(st.dragTo);
+          leave = g.start;
           gsap.set(ghost, { x: fd.x, y: fd.y });
           tl.to("#cursor", { scale: 0.85, duration: 0.08, ease: "power1.in" }, grab);
           shape("grabbing", grab);
@@ -679,6 +695,7 @@ const KIT = `    // Screen-demo kit: builds the camera, cursor and actions from 
         }
         if (st.linkFrom && st.linkTo) {
           var h = reach(st.linkFrom, t + 0.95, "crosshair"), hold = t + 0.95, letGo = end - 0.35, s0 = h.point, s1 = mid(st.linkTo);
+          leave = h.start;
           // A dashed line from the handle to wherever the cursor is.
           var line = layer("width:1px;height:0;border-top:2px dashed rgb(" + accent + ");transform-origin:0 50%");
           gsap.set(line, { x: s0.x, y: s0.y - 1, scaleX: 0 });
@@ -690,6 +707,7 @@ const KIT = `    // Screen-demo kit: builds the camera, cursor and actions from 
           tl.to("#cursor", { scale: 1, duration: 0.08 }, letGo);
           tl.to(line, { opacity: 0, duration: 0.1 }, end);
         }
+        if (look) spot(look, t + 0.35, Math.max(t + 0.8, leave));
       });
       window.__timelines = window.__timelines || {};
       window.__timelines[root.dataset.compositionId] = tl;
