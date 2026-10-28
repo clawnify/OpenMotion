@@ -13,7 +13,7 @@ import {
   type SettleIO,
 } from "../src/server/presenters.ts";
 import { audioDurationSeconds } from "../src/server/audio-duration.ts";
-import { composeMusic, falResult, falStatus, listVoices, soundEffect, speak, submitAurora } from "../src/server/providers.ts";
+import { composeMusic, falResult, falStatus, listVoices, soundEffect, speak, submitAurora, transcribe } from "../src/server/providers.ts";
 
 const NOW = Date.parse("2026-10-05T12:00:00Z");
 
@@ -255,12 +255,17 @@ test("fal's result: a 5xx or 429 is asked again later, a 4xx is the job's failur
 });
 
 test("speech passes the voice, model and settings through, and voices come back trimmed and paged", async () => {
-  const { sent } = await withFetch(new Response(new Uint8Array([0xff, 0xfb])), () =>
-    speak("el-key", { voiceId: "ric clone", text: "Hello", modelId: "eleven_v3", voiceSettings: { stability: 0.5 } }),
+  const answer = Response.json({
+    audio_base64: "//s=",
+    alignment: { characters: [..."Hi"], character_start_times_seconds: [0, 0.1], character_end_times_seconds: [0.1, 0.2] },
+  });
+  const { sent, out } = await withFetch(answer, () =>
+    speak("el-key", { voiceId: "ric clone", text: "Hi", modelId: "eleven_v3", voiceSettings: { stability: 0.5 } }),
   );
-  assert.equal(sent[0].url, "https://api.elevenlabs.io/v1/text-to-speech/ric%20clone?output_format=mp3_44100_128");
+  assert.equal(sent[0].url, "https://api.elevenlabs.io/v1/text-to-speech/ric%20clone/with-timestamps?output_format=mp3_44100_128");
+  assert.deepEqual(out, { audio: new Uint8Array([0xff, 0xfb]), words: [{ text: "Hi", start: 0, end: 0.2 }] });
   assert.equal(new Headers(sent[0].init?.headers).get("xi-api-key"), "el-key");
-  assert.deepEqual(JSON.parse(String(sent[0].init?.body)), { text: "Hello", model_id: "eleven_v3", voice_settings: { stability: 0.5 } });
+  assert.deepEqual(JSON.parse(String(sent[0].init?.body)), { text: "Hi", model_id: "eleven_v3", voice_settings: { stability: 0.5 } });
 
   const voices = await withFetch(
     Response.json({ voices: [{ voice_id: "v1", name: "Ric", category: "cloned", labels: { accent: "italian" }, preview_url: "https://x/p.mp3", extra: 1 }], has_more: true, next_page_token: "t2", total_count: 40 }),
@@ -271,6 +276,27 @@ test("speech passes the voice, model and settings through, and voices come back 
     voices: [{ voice_id: "v1", name: "Ric", category: "cloned", description: null, labels: { accent: "italian" }, preview_url: "https://x/p.mp3" }],
     next_page_token: "t2",
   });
+});
+
+test("transcription asks Scribe for word times and keeps the spoken words", async () => {
+  const { sent, out } = await withFetch(
+    Response.json({
+      language_code: "ita",
+      words: [
+        { text: "Ciao", start: 0.2, end: 0.5, type: "word" },
+        { text: " ", start: 0.5, end: 0.6, type: "spacing" },
+        { text: "a", start: 0.6, end: 0.7, type: "word" },
+      ],
+    }),
+    () => transcribe("el-key", new Blob([new Uint8Array([1, 2])]), "it"),
+  );
+  assert.equal(sent[0].url, "https://api.elevenlabs.io/v1/speech-to-text");
+  const form = sent[0].init?.body as FormData;
+  assert.equal(form.get("model_id"), "scribe_v2");
+  assert.equal(form.get("timestamps_granularity"), "word");
+  assert.equal(form.get("tag_audio_events"), "false");
+  assert.equal(form.get("language_code"), "it");
+  assert.deepEqual(out, { language: "ita", words: [{ text: "Ciao", start: 0.2, end: 0.5 }, { text: "a", start: 0.6, end: 0.7 }] });
 });
 
 test("music asks for its length in ms, no vocals unless allowed, and a plain MP3", async () => {

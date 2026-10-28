@@ -6,6 +6,8 @@
 
 /** Photo + voice -> talking head, on fal.ai. */
 export const AURORA_ENDPOINT = "fal-ai/creatify/aurora";
+import { type CharacterAlignment, type Word, wordsFromAlignment, wordsFromTranscript } from "../shared/words.ts";
+
 const FAL_QUEUE = "https://queue.fal.run";
 const ELEVENLABS = "https://api.elevenlabs.io";
 
@@ -90,12 +92,18 @@ export interface SpeechRequest {
   voiceSettings?: Record<string, unknown>;
 }
 
-/** Text to speech in one of the user's ElevenLabs voices. MP3, 44.1 kHz, 128 kbps. */
-export async function speak(apiKey: string, req: SpeechRequest): Promise<Uint8Array> {
-  const url = `${ELEVENLABS}/v1/text-to-speech/${encodeURIComponent(req.voiceId)}?output_format=mp3_44100_128`;
+/**
+ * Text to speech in one of the user's ElevenLabs voices. MP3, 44.1 kHz,
+ * 128 kbps, with when each word is spoken (the `/with-timestamps` variant:
+ * same voice, same price, the audio comes back as base64 beside character
+ * times). The times follow the script as written, not as normalised for
+ * reading, so a caption says "$5" where the voice says "five dollars".
+ */
+export async function speak(apiKey: string, req: SpeechRequest): Promise<{ audio: Uint8Array; words: Word[] }> {
+  const url = `${ELEVENLABS}/v1/text-to-speech/${encodeURIComponent(req.voiceId)}/with-timestamps?output_format=mp3_44100_128`;
   const res = await fetch(url, {
     method: "POST",
-    headers: { "xi-api-key": apiKey, "Content-Type": "application/json", Accept: "audio/mpeg" },
+    headers: { "xi-api-key": apiKey, "Content-Type": "application/json" },
     body: JSON.stringify({
       text: req.text,
       ...(req.modelId ? { model_id: req.modelId } : {}),
@@ -103,7 +111,34 @@ export async function speak(apiKey: string, req: SpeechRequest): Promise<Uint8Ar
     }),
   });
   if (!res.ok) throw await failure("elevenlabs", res);
-  return new Uint8Array(await res.arrayBuffer());
+  const body = (await res.json()) as { audio_base64?: string; alignment?: CharacterAlignment | null };
+  if (!body.audio_base64) throw new ProviderError("elevenlabs", res.status, "no audio in the answer");
+  return { audio: fromBase64(body.audio_base64), words: wordsFromAlignment(body.alignment) };
+}
+
+function fromBase64(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+/**
+ * The words spoken in a recording or video, with their times: ElevenLabs
+ * speech to text (Scribe). The language is detected unless one is given
+ * (ISO 639-1 or 639-3). Sound events such as laughter are left out.
+ */
+export async function transcribe(apiKey: string, file: Blob, language?: string): Promise<{ words: Word[]; language: string | null }> {
+  const form = new FormData();
+  form.set("model_id", "scribe_v2");
+  form.set("file", file, "media");
+  form.set("timestamps_granularity", "word");
+  form.set("tag_audio_events", "false");
+  if (language) form.set("language_code", language);
+  const res = await fetch(`${ELEVENLABS}/v1/speech-to-text`, { method: "POST", headers: { "xi-api-key": apiKey }, body: form });
+  if (!res.ok) throw await failure("elevenlabs", res);
+  const body = (await res.json()) as { words?: Parameters<typeof wordsFromTranscript>[0]; language_code?: string };
+  return { words: wordsFromTranscript(body.words), language: body.language_code ?? null };
 }
 
 export interface MusicRequest {

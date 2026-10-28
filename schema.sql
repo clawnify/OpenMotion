@@ -45,7 +45,12 @@ CREATE TABLE IF NOT EXISTS assets (
   -- measured_at says it was tried, so it is tried once.
   loudness REAL,
   peak_at REAL,
-  measured_at TEXT
+  measured_at TEXT,
+  -- What is said in it, word by word: JSON [{text, start, end}], seconds into
+  -- the file (shared/words.ts). Speech made here has them from the voice
+  -- provider; recordings get them from POST /api/assets/:id/transcribe. Null:
+  -- never transcribed; []: nobody speaks.
+  words TEXT
 );
 
 -- Render jobs: one row per render. The MP4 is stored in R2 and served from
