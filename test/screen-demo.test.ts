@@ -142,6 +142,13 @@ test("the cursor is cursorkit's, its hotspot on the point that clicks, in the sh
   assert.match(html, /reach\(st\.linkFrom, t \+ 0\.95, "crosshair"\)/);
 });
 
+test("a focus zooms only when the step's action is inside it; otherwise it is a spotlight", () => {
+  const html = screenDemoHtml(demo);
+  assert.match(html, /var look = st\.focus && !\(act && inside\(act, st\.focus\)\) \? st\.focus : null/);
+  assert.match(html, /var f = look \? null : st\.focus \|\| st\.type;/);
+  assert.match(html, /if \(look\) spot\(look, t \+ 0\.35, Math\.max\(t \+ 0\.8, leave\)\);/);
+});
+
 test("the cursor images load the cursorkit version package.json pins", () => {
   const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
   assert.equal(pkg.dependencies["@pallaoro/cursorkit"], CURSORKIT);
