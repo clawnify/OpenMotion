@@ -238,9 +238,14 @@ export function demoSpecOf(html: string): unknown {
   }
 }
 
-/** When typing starts and ends inside a step: after the cursor has got there and clicked. */
+/**
+ * When typing starts and ends inside a step. The cursor clicks into the field
+ * at 0.95 s, the camera punches in from 1.0 s to 1.45 s, and the first key
+ * lands as the zoom settles, so the camera holds still while the text goes in
+ * (as in Cursor's changelog videos: zoom first, then type, never pan).
+ */
 export function typingWindow(start: number, seconds: number): [number, number] {
-  return [start + 1.1, start + seconds - 0.4];
+  return [start + 1.45, start + seconds - 0.4];
 }
 
 export function screenDemoHtml(opts: ScreenDemoOptions): string {
@@ -660,7 +665,15 @@ const KIT = `    // Screen-demo kit: builds the camera, cursor and actions from 
         var act = st.click || st.type || st.dragFrom || st.linkFrom;
         var look = st.focus && !(act && inside(act, st.focus)) ? st.focus : null, leave = end;
         var f = look ? null : st.focus || st.type;
-        if (f) camTo(t + 0.3, 1.1, "expo.inOut", fit(f), mid(f));
+        // Typing: the hand travels to the field in the wider view, clicks, and
+        // only then the camera punches in, fast and easing out, landing as the
+        // first key goes in (typingWindow); it holds while the text goes in.
+        if (st.type && !look) {
+          if (st.focus) camTo(t + 0.2, 0.75, "power3.inOut", fit(st.focus), mid(st.focus));
+          else camTo(t + 0.2, 0.75, "power3.inOut", 1, { x: PW / 2, y: PH / 2 });
+          camTo(t + 1.0, 0.45, "power3.out", Math.min(1.8, fit(st.type)), mid(st.type));
+        }
+        else if (f) camTo(t + 0.3, 1.1, "expo.inOut", fit(f), mid(f));
         else if (pair) camTo(t + 0.2, 1, "power3.inOut", fitWide(pair), mid(pair));
         else camTo(t + 0.25, 0.9, "power3.inOut", 1, { x: PW / 2, y: PH / 2 });
         if (st.click) {

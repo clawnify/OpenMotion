@@ -419,7 +419,7 @@ viewer at (`focus`), and the one action that reaches the next state:
 | `click` | cursor travels, presses, ripple, the page changes | 3.5 s (at least 2) |
 | `drag` | the item is picked up and its ghost follows the cursor to the drop | 3.4 s (at least 2.2) |
 | `connect` | a line grows from one handle to the cursor and lands on the other | 3.4 s (at least 2.2) |
-| `type` | camera on the field, cursor clicks in, the text goes in | 4.5 s (at least 2.5) |
+| `type` | cursor clicks into the field, the camera punches in on it, the text goes in | 4.5 s (at least 2.5) |
 
 The last step usually has no action: 2 to 3 s to look at the result.
 
