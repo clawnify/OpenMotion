@@ -284,6 +284,38 @@ export function fontFamiliesIn(html: string): string[] {
   return [...out.values()];
 }
 
+/** Generic families that are not a sans-serif (see genericFirstFonts). */
+const NOT_SANS = new Set(["serif", "monospace", "cursive", "fantasy", "ui-serif", "ui-monospace", "math", "fangsong"]);
+
+export interface GenericFirstFont {
+  /** The family the list starts with, as written: "monospace". */
+  generic: string;
+  line: number;
+}
+
+/**
+ * font-family lists that start with a generic family other than a sans-serif,
+ * first use of each. The renderer puts Inter in front of any list that starts
+ * with a generic family, so every frame is drawn with the same font on any
+ * machine (hyperframes normalizeSystemFontPrimaryFamilies). For sans-serif and
+ * system-ui that is close to what the preview shows; for `monospace` or
+ * `serif` the video comes out in a sans-serif while the preview does not.
+ */
+export function genericFirstFonts(html: string): GenericFirstFont[] {
+  const seen = new Map<string, { generic: string; at: number }>();
+  for (const piece of cssPieces(html)) {
+    for (const m of piece.text.matchAll(/font-family\s*:\s*([^;}]+)/gi)) {
+      const first = m[1].split(",")[0].trim().replace(/^["']|["']$/g, "").trim();
+      const key = first.toLowerCase();
+      if (!NOT_SANS.has(key) || seen.has(key)) continue;
+      seen.set(key, { generic: first, at: piece.at + m.index! });
+    }
+  }
+  return [...seen.values()]
+    .sort((a, b) => a.at - b.at)
+    .map((g) => ({ generic: g.generic, line: html.slice(0, g.at).split("\n").length }));
+}
+
 /**
  * A Google Fonts stylesheet for one family, with the weights the renderer asks
  * for. One per family: css2 refuses a whole request when one family in it is
