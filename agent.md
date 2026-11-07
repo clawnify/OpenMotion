@@ -153,6 +153,19 @@ against this (the preview, the timeline and the render all fall back to where
 the last clip ends), but state the length so the video is the one you meant.
 When you lengthen a composition, raise `data-duration` with it.
 
+### Fonts: name one first, keep a generic as the fallback
+
+Write `font-family:'Roboto Mono',monospace`, never `monospace` alone. The
+renderer fetches any Google Fonts family by its exact name (case sensitive),
+in a `style` attribute or a `<style>` rule, with no `<link>`. A list that
+starts with a generic family comes out in Inter in the video, whatever the
+preview shows: a `monospace` terminal or a `serif` quote turns sans-serif.
+Fonts the renderer bundles render without a fetch: Inter, Roboto, Open Sans,
+Lato, Poppins, Montserrat, Outfit, Nunito, Oswald, League Gothic, Archivo
+Black, Playfair Display, EB Garamond, JetBrains Mono, IBM Plex Mono, Space
+Mono, Source Code Pro, Noto Sans JP. For code,
+`'JetBrains Mono',monospace`.
+
 ## Embedding the user's media
 
 Media the user uploads lives in the **Media library** and is referenced from the
@@ -626,8 +639,11 @@ is the line in the HTML you sent. `findings` lists at most 10, errors first;
 the counts cover all of them. `lint` is `null` when the HTML is empty.
 
 Fix every error before you report back. Warnings are worth fixing when the fix
-is small. One warning is the app's own, not HyperFrames': `off_brand_color`, a
-colour whose hue is in none of the brand's colours (only when a brand is set). The editor shows the same list to the user as an "issues" badge, with
+is small. Two warnings are the app's own, not HyperFrames': `off_brand_color`, a
+colour whose hue is in none of the brand's colours (only when a brand is set),
+and `generic_font_first`, a font list that starts with `monospace` or `serif`
+(see Fonts). `font_family_without_font_face` is reported only for a name
+Google Fonts does not serve: fix the spelling or the case. The editor shows the same list to the user as an "issues" badge, with
 an "Ask AI to fix" button that sends you the findings.
 
 Two HyperFrames rules are never reported, because their fix (move a scene into

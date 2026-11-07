@@ -12,7 +12,8 @@
 // at startup would slow every cold start, including routes that never lint.
 
 import type { HyperframeLintFinding } from "@hyperframes/lint/browser";
-import { offBrandColors, paletteText, type Brand } from "../shared/brand.ts";
+import { fontFamiliesIn, genericFirstFonts, offBrandColors, paletteText, type Brand } from "../shared/brand.ts";
+import { googleFontExists } from "./google-fonts.ts";
 
 export interface LintFinding {
   severity: "error" | "warning";
@@ -104,6 +105,57 @@ function brandFindings(html: string, brand: Brand | null | undefined): Hyperfram
   }));
 }
 
+/**
+ * font_family_without_font_face says a family that is not bundled with the
+ * renderer, and not loaded by a <link>, cannot be supplied. The renderer does
+ * supply it: it fetches any family Google Fonts serves under that exact name.
+ * So the finding stays only for names Google does not know (a typo, the wrong
+ * case), which do fall back, and as it was when Google could not be asked.
+ * The rule reads <style> blocks only, never a style attribute.
+ */
+async function withoutGoogleFonts(html: string, f: HyperframeLintFinding): Promise<HyperframeLintFinding | null> {
+  if (f.code !== "font_family_without_font_face") return f;
+  const listed = f.message.match(/declaration: (.+?)\. These/)?.[1];
+  if (!listed) return f;
+  // The rule lowercases the names; Google answers only to the name as written.
+  const asWritten = new Map(fontFamiliesIn(html).map((n) => [n.toLowerCase(), n]));
+  const names = listed.split(", ").map((n) => asWritten.get(n) ?? n);
+  const answers = await Promise.all(names.map(googleFontExists));
+  if (answers.includes(null)) return f;
+  const missing = names.filter((_, i) => !answers[i]);
+  if (!missing.length) return null;
+  return {
+    ...f,
+    message: `Google Fonts has no ${missing.length === 1 ? "family" : "families"} named exactly ${missing.join(", ")}, so the video falls back to another font.`,
+    fixHint: `Check the name on fonts.google.com: names are case sensitive ("Roboto Mono", not "roboto mono"). Or use a font the renderer bundles, such as Inter or JetBrains Mono.`,
+  };
+}
+
+const NAMED_FIRST: Record<string, string> = {
+  monospace: "'JetBrains Mono', monospace",
+  "ui-monospace": "'JetBrains Mono', ui-monospace",
+  serif: "'EB Garamond', serif",
+  "ui-serif": "'EB Garamond', ui-serif",
+};
+
+/**
+ * The app's own font rule: a font list that starts with monospace or serif
+ * comes out in Inter (shared/brand.ts genericFirstFonts says why), while the
+ * preview shows the browser's own. A warning per family, at its first use.
+ */
+function genericFontFindings(html: string): HyperframeLintFinding[] {
+  return genericFirstFonts(html).map((g): HyperframeLintFinding => {
+    const example = NAMED_FIRST[g.generic.toLowerCase()];
+    return {
+      severity: "warning",
+      code: "generic_font_first",
+      message: `A font list that starts with ${g.generic} comes out in Inter in the video: the renderer puts Inter in front of a list that starts with a generic family. The preview shows the browser's ${g.generic} font instead.`,
+      fixHint: `Name a font first and keep ${g.generic} as the fallback${example ? `: font-family: ${example}` : ""}. Any Google Fonts family works by its exact name.`,
+      line: g.line,
+    };
+  });
+}
+
 /** null when there is nothing to lint, or the linter itself failed: a lint
  *  must never be the reason a save or a read does not go through. With a
  *  brand, colours outside it are reported too. */
@@ -114,10 +166,9 @@ export async function lintComposition(html: string, brand?: Brand | null): Promi
     const result = await lintHyperframeHtml(asRendered(html));
     // "info" findings are advice about fonts and the like, not problems.
     // NOT_HERE are rules whose fix cannot be made in this app (see above).
-    const real = byImportance([
-      ...result.findings.filter((f) => f.severity !== "info" && !NOT_HERE.has(f.code) && !intendedSilentBase(html, f)),
-      ...brandFindings(html, brand),
-    ]);
+    const upstream = result.findings.filter((f) => f.severity !== "info" && !NOT_HERE.has(f.code) && !intendedSilentBase(html, f));
+    const checked = (await Promise.all(upstream.map((f) => withoutGoogleFonts(html, f)))).filter((f) => f !== null);
+    const real = byImportance([...checked, ...genericFontFindings(html), ...brandFindings(html, brand)]);
     return {
       errors: real.filter((f) => f.severity === "error").length,
       warnings: real.filter((f) => f.severity === "warning").length,

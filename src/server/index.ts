@@ -15,6 +15,7 @@ import { settle, type RenderJob, type SettleIO } from "./exports";
 import { compositionLength, withLength } from "../shared/length";
 import { type Word, groupWords, parseWords } from "../shared/words";
 import { lintComposition } from "./lint";
+import { googleFontExists } from "./google-fonts";
 import { EMPTY_BRAND, FONT_NAME, HEX, fontFamiliesIn, googleFontsHref, hasBrand, normalHex, type Brand } from "../shared/brand";
 import { z } from "zod";
 import { type ScreenDemoOptions, screenDemoHtml, screenDemoProblems, defaultSeconds, demoSpecOf, fitSeconds, minimumSeconds, replaceDemoSteps, withDemoSpec } from "../shared/screen-demo";
@@ -505,22 +506,9 @@ const brandBody = z
   .partial()
   .strict();
 
-/**
- * Whether Google Fonts knows the family. The renderer fetches a font by its
- * exact name and quietly falls back to a system font when the name is wrong
- * ("inter", "Monsterrat"), so a wrong name is caught here, when it is typed.
- * null when Google Fonts cannot be reached: then the name is kept unchecked.
- */
-async function googleFontExists(family: string): Promise<boolean | null> {
-  try {
-    const r = await fetch(googleFontsHref(family));
-    if (r.ok) return true;
-    return r.status === 400 ? false : null;
-  } catch {
-    return null;
-  }
-}
-
+// A brand font is checked against Google Fonts when it is typed: the renderer
+// fetches it by its exact name and quietly falls back when the name is wrong
+// ("inter", "Monsterrat"). When Google cannot be reached it is kept unchecked.
 // Partial: what the body leaves out stays as it is, null clears a field.
 app.put("/api/brand", async (c) => {
   const parsed = brandBody.safeParse(await c.req.json().catch(() => null));
